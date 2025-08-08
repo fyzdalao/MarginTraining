@@ -2,6 +2,9 @@ import numpy as np
 import torch
 from torch import nn
 import warnings
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import networks
 import torch.nn.functional as F
 import math
@@ -31,7 +34,7 @@ class Model(nn.Module):
 
         # 创建模型
         model = networks.__dict__[self.arch](num_classes=num_classes, mode=mode, weight=weight)
-        checkpoint_path = '../temp/ckpt.best.pth.tar'  # 参数文件路径
+        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'temp', 'ckpt.best.pth.tar')  # 参数文件路径
 
         # 加载参数
         checkpoint = torch.load(checkpoint_path, map_location=self.device)

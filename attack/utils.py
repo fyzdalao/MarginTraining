@@ -50,10 +50,9 @@ class Logger:
                 f.flush()
 
 
-def sample_cifar10_every_class(random_seed=0, data_amount=1000):
-    samples_per_class = data_amount / 10
-    data_path = '../database/CIFAR-10/cifar-10-batches-py/test_batch'
-    print(os.path.exists(data_path))
+def sample_cifar10_every_class(random_seed=0, data_amount=500):
+    samples_per_class = int(data_amount / 10)
+    data_path = '../database/CIFAR10/cifar-10-batches-py/test_batch'
     with open(data_path, 'rb') as f:
         batch = pickle.load(f, encoding='bytes')
     images = batch[b'data']  # shape: (10000, 3072)
@@ -76,61 +75,4 @@ def sample_cifar10_every_class(random_seed=0, data_amount=1000):
         y_test[i, labels[idx]] = 1
 
     return x_test, y_test
-
-
-def sample_imagenet_every_class(model, random_seed=0, need_right_prediction=True):
-    arch = model.arch
-    data_path = 'data/storage/imagenetEvery_%s_x_seed=%d_right=%d.npy' % (arch, random_seed, need_right_prediction)
-    label_path = 'data/storage/imagenetEvery_%s_y_seed=%d_right=%d.npy' % (arch, random_seed, need_right_prediction)
-
-
-    if not os.path.exists(data_path) or not os.path.exists(label_path):
-        with open('data/val.txt','r') as f:
-            lines = f.read().split('\n')
-        labels = {}
-        for line in lines:
-            if ' ' not in line:
-                continue
-            file, label = line.split(' ')
-            labels[file] = int(label)
-        data = []
-        files = os.listdir('data/ILSVRC2012_img_val')
-        label = np.zeros((1000, 1000), dtype=np.uint8)
-        label_done = []
-        random.seed(random_seed)
-
-        for i in random.sample(range(len(files)), len(files)):
-            file = files[i]
-            val = labels[file]
-            if val in label_done:
-                continue
-            img = np.array(PIL.Image.open(
-                'data/ILSVRC2012_img_val' + '/' + file).convert('RGB').resize((224, 224))) \
-                      .astype(np.float32).transpose((2, 0, 1)) / 255
-
-            # img = np.array(PIL.Image.open(
-            #     'data/ILSVRC2012_img_val' + '/' + file).convert('RGB').resize((384, 384))) \
-            #           .astype(np.float32).transpose((2, 0, 1)) / 255
-
-            #保证采样的所有数据都是预测正确的数据
-            if need_right_prediction:
-                prd = model(img[np.newaxis, ...]).argmax(1)
-                if prd != val:
-                    continue
-
-            label[len(data), val] = 1
-            data.append(img)
-            label_done.append(val)
-            print('selecting samples in different classes...', len(label_done), '/', 1000, end='\r')
-            if len(label_done) == 1000:
-                break
-        x_test = np.array(data)
-        y_test = np.array(label)
-        np.save(data_path, x_test)
-        np.save(label_path, y_test)
-    else:
-        x_test = np.load(data_path)
-        y_test = np.load(label_path)
-    return x_test, y_test
-
 
