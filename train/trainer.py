@@ -28,7 +28,7 @@ print(model_names)
 
 parser = argparse.ArgumentParser(description='PyTorch Visual Classification Training')
 parser.add_argument('--dataset', default='cifar10', help='dataset setting')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50', choices=model_names, help='model architecture: ' + ' | '.join(model_names) + ' (default: resnet32)')
+parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet34', choices=model_names, help='model architecture: ' + ' | '.join(model_names) + ' (default: resnet32)')
 parser.add_argument('--mode', default='norm', choices=['', 'norm', 'fix'], help='the mode of the last linear layer')
 parser.add_argument('--loss_type', default="CE", type=str, help='loss type')
 parser.add_argument('-s', '--scale', default=5, type=int, help='the scale of logits')
