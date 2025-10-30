@@ -13,6 +13,7 @@ import math
 class Model(nn.Module):
     def __init__(self, args=None):
         super(Model, self).__init__()
+        self.args = args
         self.arch = args.arch
         self.device = torch.device(args.device)
 
@@ -34,7 +35,7 @@ class Model(nn.Module):
 
         # 创建模型
         model = networks.__dict__[self.arch](num_classes=num_classes, mode=mode, weight=weight)
-        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'viccheckpoint', 'cifar10_resnet34_norm_CosFace_5_0_Cos_weight_5','ckpt.best.pth.tar')  # 参数文件路径
+        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint,'ckpt.best.pth.tar')  # 参数文件路径
 
         # 加载参数
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
