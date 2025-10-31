@@ -204,7 +204,7 @@ def main():
         print('Train Ep {} Adv Acc: {:.2f} Loss: {:.4f}'.format(epoch, train_acc, train_loss))
         return train_acc, train_loss
 
-    def validate(epoch):
+    def validate(epoch, training_start_time=None):
         model.eval()
         benign_correct = 0
         adv_correct = 0
@@ -236,11 +236,28 @@ def main():
         total = len(test_loader.dataset)
         benign_acc = 100. * benign_correct / total
         adv_acc = 100. * adv_correct / total
-        print('Test Ep {} Benign Acc: {:.2f} Adv Acc: {:.2f} Benign Loss: {:.4f} Adv Loss: {:.4f}'.format(
-            epoch, benign_acc, adv_acc, benign_loss, adv_loss))
-        return adv_acc, benign_acc, benign_loss, adv_loss
+        
+        # Calculate total training time if start time is provided
+        total_time_str = ''
+        if training_start_time is not None:
+            total_elapsed = time.time() - training_start_time
+            hours = int(total_elapsed // 3600)
+            minutes = int((total_elapsed % 3600) // 60)
+            seconds = int(total_elapsed % 60)
+            total_time_str = 'Total Training Time: {:02d}:{:02d}:{:02d} ({:.1f}s)'.format(
+                hours, minutes, seconds, total_elapsed)
+        
+        # Format output message
+        output_msg = 'Test Ep {} Benign Acc: {:.2f} Adv Acc: {:.2f} Benign Loss: {:.4f} Adv Loss: {:.4f}'.format(
+            epoch, benign_acc, adv_acc, benign_loss, adv_loss)
+        print(output_msg)
+        if total_time_str:
+            print(total_time_str)
+        return adv_acc, benign_acc, benign_loss, adv_loss, output_msg, total_time_str
 
     os.makedirs(args.out, exist_ok=True)
+    # Record training start time for total elapsed time tracking
+    training_start_time = time.time()
     for epoch in range(0, args.epochs):
         epoch_start = time.time()
         # Update learning rate at the start (Original schedule uses epoch number)
@@ -249,18 +266,27 @@ def main():
         # Note: scheduler.step() for Cos/Step is called after training to follow PyTorch convention
         
         train_acc, train_loss = train(epoch)
-        acc1, benign_acc, benign_loss, adv_loss = validate(epoch)
+        acc1, benign_acc, benign_loss, adv_loss, test_output_msg, total_time_str = validate(epoch, training_start_time)
         best_acc1 = max(best_acc1, acc1)
         
         # Update learning rate scheduler after training (standard PyTorch convention)
         if args.scheduler != 'Original' and scheduler is not None:
             scheduler.step()
         elapsed = time.time() - epoch_start
-        print('Epoch {} elapsed: {:.3f}s'.format(epoch, elapsed))
-        # write logs (epoch, metrics, elapsed)
-        log_training.write('{},{:.4f},{:.4f},{:.3f}\n'.format(epoch, train_acc, train_loss, elapsed))
+        epoch_time_msg = 'Epoch {} elapsed: {:.3f}s'.format(epoch, elapsed)
+        print(epoch_time_msg)
+        
+        # Write detailed logs with all information shown on screen
+        # Training log: epoch, train_acc, train_loss, epoch_elapsed
+        log_training.write('Epoch {}: Train Adv Acc: {:.4f}, Train Loss: {:.4f}, Epoch Time: {:.3f}s\n'.format(
+            epoch, train_acc, train_loss, elapsed))
         log_training.flush()
-        log_testing.write('{},{:.4f},{:.4f},{:.4f},{:.3f}\n'.format(epoch, benign_acc, acc1, benign_loss, elapsed))
+        
+        # Testing log: epoch, all metrics, epoch_elapsed, total_time
+        log_testing.write('Epoch {}: {}\n'.format(epoch, test_output_msg))
+        if total_time_str:
+            log_testing.write('Epoch {}: {}\n'.format(epoch, total_time_str))
+        log_testing.write('Epoch {}: {}\n'.format(epoch, epoch_time_msg))
         log_testing.flush()
         # save checkpoint with same keys as trainer.py
         if (epoch + 1) % args.save_freq == 0 or (epoch + 1) == args.epochs:

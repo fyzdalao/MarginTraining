@@ -200,10 +200,12 @@ def main_worker(gpu, ngpus_per_node, args):
         return
     # args.reg = args.reg * 100 / (num_classes ** 2)
     tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
+    # Record training start time for total elapsed time tracking
+    training_start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer)
         scheduler.step()
-        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer)
+        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer, training_start_time=training_start_time)
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
         tf_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
@@ -305,7 +307,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
     tf_writer.add_scalar('lr', optimizer.param_groups[-1]['lr'], epoch)
 
 
-def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None, flag='val'):
+def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None, flag='val', training_start_time=None):
     batch_time = AverageMeter('Time', ':6.3f')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
@@ -361,13 +363,29 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
                   .format(flag=flag, top1=top1, top5=top5))
         out_cls_acc = '%s Class Accuracy: %s' % (
         flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
+        
+        # Calculate and display total training time if start time is provided
+        total_time_str = ''
+        if training_start_time is not None:
+            total_elapsed = time.time() - training_start_time
+            hours = int(total_elapsed // 3600)
+            minutes = int((total_elapsed % 3600) // 60)
+            seconds = int(total_elapsed % 60)
+            total_time_str = 'Total Training Time: {:02d}:{:02d}:{:02d} ({:.1f}s)'.format(
+                hours, minutes, seconds, total_elapsed)
+        
         print(output)
         print(out_cls_acc)
-        print('sample margin: ' + str(-sample_margins.avg) +'\n')
+        print('sample margin: ' + str(-sample_margins.avg))
+        if total_time_str:
+            print(total_time_str)
+        print()
         if log is not None:
             log.write(output + '\n')
             log.write(out_cls_acc + '\n')
-            log.write('sample margin: ' + str(-sample_margins.avg) +'\n')
+            log.write('sample margin: ' + str(-sample_margins.avg) + '\n')
+            if total_time_str:
+                log.write(total_time_str + '\n')
             log.flush()
 
         tf_writer.add_scalar('sample_margin/test_' + flag, -sample_margins.avg, epoch)
