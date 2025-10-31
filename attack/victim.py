@@ -35,7 +35,8 @@ class Model(nn.Module):
 
         # 创建模型
         model = networks.__dict__[self.arch](num_classes=num_classes, mode=mode, weight=weight)
-        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint,'ckpt.best.pth.tar')  # 参数文件路径
+        #checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint,'ckpt.best.pth.tar')  # 参数文件路径
+        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint)
 
         # 加载参数
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
