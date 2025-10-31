@@ -243,15 +243,18 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     for epoch in range(0, args.epochs):
         epoch_start = time.time()
-        # Update learning rate based on scheduler type
+        # Update learning rate at the start (Original schedule uses epoch number)
         if args.scheduler == 'Original':
             adjust_learning_rate(optimizer, epoch, args.lr)
-        elif scheduler is not None:
-            scheduler.step()
+        # Note: scheduler.step() for Cos/Step is called after training to follow PyTorch convention
         
         train_acc, train_loss = train(epoch)
         acc1, benign_acc, benign_loss, adv_loss = validate(epoch)
         best_acc1 = max(best_acc1, acc1)
+        
+        # Update learning rate scheduler after training (standard PyTorch convention)
+        if args.scheduler != 'Original' and scheduler is not None:
+            scheduler.step()
         elapsed = time.time() - epoch_start
         print('Epoch {} elapsed: {:.3f}s'.format(epoch, elapsed))
         # write logs (epoch, metrics, elapsed)
