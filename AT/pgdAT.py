@@ -157,13 +157,21 @@ def main():
 
     # logging setup (similar to trainer.py)
     if not args.store_name:
-        args.store_name = '{}_{}_{}_pgd'.format(args.dataset, args.arch, args.mode if args.mode else 'std')
+        args.store_name = '{}_{}_{}_{}_pgd'.format(
+            args.dataset, 
+            args.arch, 
+            args.mode if args.mode else 'std',
+            args.scheduler
+        )
     log_dir = os.path.join(args.root_log, args.store_name)
     os.makedirs(log_dir, exist_ok=True)
     with open(os.path.join(log_dir, 'args.txt'), 'w') as f:
         f.write(str(args))
-    log_training = open(os.path.join(log_dir, 'log_train.csv'), 'a')
-    log_testing = open(os.path.join(log_dir, 'log_test.csv'), 'a')
+    # Include arch and scheduler in log filenames to prevent conflicts
+    log_train_file = 'log_train_{}_{}.csv'.format(args.arch, args.scheduler)
+    log_test_file = 'log_test_{}_{}.csv'.format(args.arch, args.scheduler)
+    log_training = open(os.path.join(log_dir, log_train_file), 'a')
+    log_testing = open(os.path.join(log_dir, log_test_file), 'a')
 
     def train(epoch):
         model.train()
@@ -260,7 +268,7 @@ def main():
                 'best_acc1': best_acc1,
                 'optimizer': optimizer.state_dict(),
             }
-            ckpt_path = os.path.join(args.out, 'pgd_{}_{}_epoch{}.pth'.format(args.dataset, args.arch, epoch + 1))
+            ckpt_path = os.path.join(args.out, 'pgd_{}_{}_{}_epoch{}.pth'.format(args.dataset, args.arch, args.scheduler, epoch + 1))
             torch.save(state, ckpt_path)
             print('Saved checkpoint to {}'.format(ckpt_path))
 
