@@ -105,9 +105,9 @@ def main():
     parser.add_argument('-b', '--batch-size', default=256, type=int)
     parser.add_argument('--epochs', default=200, type=int)
     parser.add_argument('--workers', default=4, type=int)
-    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float, dest='lr')
+    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float, dest='lr') #0.05
     parser.add_argument('--momentum', default=0.9, type=float)
-    parser.add_argument('--weight-decay', default=2e-4, type=float)
+    parser.add_argument('--weight-decay', default=2e-4, type=float) #1e-4
     parser.add_argument('--scheduler', default='Original', choices=['Step', 'Cos', 'Original'], help='Original: manual LR decay at epoch 100 and 150')
     parser.add_argument('--gpu', default=None, type=int)
     parser.add_argument('--out', default='viccheckpoint', type=str, help='checkpoint dir (like trainer)')
@@ -120,6 +120,8 @@ def main():
     parser.add_argument('--alpha', default=0.00784, type=float)
     # IAT-specific params
     parser.add_argument('--mixup-alpha', default=1.0, type=float, help='Beta distribution parameter for mixup')
+
+    parser.add_argument('--fuck', default='new', type=str, help='new or ori')
 
     args = parser.parse_args()
 
@@ -169,19 +171,27 @@ def main():
 
     # logging setup (similar to trainer.py)
     if not args.store_name:
-        args.store_name = '{}_{}_{}_{}_iat'.format(
-            args.dataset, 
-            args.arch, 
+        args.store_name = '{}_{}_{}_{}_mix{}_fuck{}_lr{}_wd{}_iat'.format(
+            args.dataset,
+            args.arch,
             args.mode if args.mode else 'std',
-            args.scheduler
+            args.scheduler,
+            args.mixup_alpha,
+            args.fuck,
+            args.lr,
+            args.weight_decay
         )
     log_dir = os.path.join(args.root_log, args.store_name)
     os.makedirs(log_dir, exist_ok=True)
     with open(os.path.join(log_dir, 'args.txt'), 'w') as f:
         f.write(str(args))
     # Include arch and scheduler in log filenames to prevent conflicts
-    log_train_file = 'log_train_{}_{}.csv'.format(args.arch, args.scheduler)
-    log_test_file = 'log_test_{}_{}.csv'.format(args.arch, args.scheduler)
+    log_train_file = 'log_train_{}_{}_mix{}_fuck{}_lr{}_wd{}.csv'.format(
+        args.arch, args.scheduler, args.mixup_alpha, args.fuck, args.lr, args.weight_decay
+    )
+    log_test_file = 'log_test_{}_{}_mix{}_fuck{}_lr{}_wd{}.csv'.format(
+        args.arch, args.scheduler, args.mixup_alpha, args.fuck, args.lr, args.weight_decay
+    )
     log_training = open(os.path.join(log_dir, log_train_file), 'a')
     log_testing = open(os.path.join(log_dir, log_test_file), 'a')
 
@@ -214,7 +224,14 @@ def main():
                               (1 - benign_lam) * benign_predicted.eq(benign_targets_b).sum().float())
 
             # Generate adversarial examples
-            adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+            if args.fuck == 'ori':
+                adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+            else:
+                prev = model.training
+                model.eval()
+                adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+                model.train(prev)
+
             
             # Mixup on adversarial inputs
             adv_inputs, adv_targets_a, adv_targets_b, adv_lam = mixup_data(adv, targets, args.mixup_alpha, device)
@@ -267,7 +284,14 @@ def main():
                 _, predicted = outputs.max(1)
                 benign_correct += predicted.eq(targets).sum().item()
 
-                adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+                if args.fuck == 'ori':
+                    adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+                else:
+                    prev = model.training
+                    model.eval()
+                    adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+                    model.train(prev)
+
                 adv_outputs = model(adv)
                 loss = criterion(adv_outputs, targets)
                 adv_loss += loss.item()
@@ -338,7 +362,19 @@ def main():
                 'best_acc1': best_acc1,
                 'optimizer': optimizer.state_dict(),
             }
-            ckpt_path = os.path.join(args.out, 'iat_{}_{}_{}_epoch{}.pth'.format(args.dataset, args.arch, args.scheduler, epoch + 1))
+            ckpt_path = os.path.join(
+                args.out,
+                'iat_{}_{}_{}_mix{}_fuck{}_lr{}_wd{}_epoch{}.pth'.format(
+                    args.dataset,
+                    args.arch,
+                    args.scheduler,
+                    args.mixup_alpha,
+                    args.fuck,
+                    args.lr,
+                    args.weight_decay,
+                    epoch + 1
+                )
+            )
             torch.save(state, ckpt_path)
             print('Saved checkpoint to {}'.format(ckpt_path))
 
