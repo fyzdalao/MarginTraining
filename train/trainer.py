@@ -67,7 +67,18 @@ def norm_weights(weights):
     return torch.sum(gravity ** 2)
 
 def main():
-    args.store_name = '_'.join([args.dataset, args.arch, args.mode, args.loss_type, str(args.scale), args.exp_str, args.scheduler, args.reg_type, str(args.reg)])
+    args.store_name = '_'.join([
+        args.dataset,
+        args.arch,
+        args.mode,
+        args.loss_type,
+        str(args.scale),
+        args.exp_str,
+        args.scheduler,
+        args.reg_type,
+        str(args.reg),
+        f'epochs{args.epochs}'
+    ])
     args.dataset = args.dataset.lower()
     print(args)
     prepare_folders(args)
@@ -280,21 +291,24 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
         batch_time.update(time.time() - end)
         end = time.time()
         if i % args.print_freq == 0:
-            output = ('Epoch: [{0}][{1}/{2}], lr: {lr:.5f}\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
-                      'SaMargin {sample_margin.val:.3f} ({sample_margin.avg:.3f})'.format(
-                epoch, i, len(train_loader), batch_time=batch_time,
-                data_time=data_time, loss=losses, top1=top1, top5=top5, sample_margin=sample_margins, lr=optimizer.param_groups[-1]['lr']))
+            current_lr = optimizer.param_groups[-1]['lr']
+            output = (
+                f"Epoch: [{epoch}/{args.epochs}][{i}/{len(train_loader)}], lr: {current_lr:.5f}\t"
+                f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
+                f"Data {data_time.val:.3f} ({data_time.avg:.3f})\t"
+                f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
+                f"Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t"
+                f"Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t"
+                f"SaMargin {sample_margins.val:.3f} ({sample_margins.avg:.3f})"
+            )
             print(output)
             log.write(output + '\n')
             log.flush()
     margin, ratio = model.margin()
-    output = '\nEpoch [{}]:\t loss={:.4f}\t Prec@1={:.4f}\t Prec@5={:.4f}\t ClsMargin={:.4f}\t SaMargin={:.4f}\n'.format(
-        epoch, losses.avg, top1.avg, top5.avg, margin, -sample_margins.avg)
+    output = (
+        f"\nEpoch [{epoch}/{args.epochs}]:\t loss={losses.avg:.4f}\t Prec@1={top1.avg:.4f}\t Prec@5={top5.avg:.4f}\t "
+        f"ClsMargin={margin:.4f}\t SaMargin={-sample_margins.avg:.4f}\n"
+    )
     print(output)
     log.write(output)
     log.flush()
@@ -359,8 +373,10 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
         cls_cnt = cf.sum(axis=1)
         cls_hit = np.diag(cf)
         cls_acc = cls_hit / cls_cnt
-        output = ('{flag} Results: Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
-                  .format(flag=flag, top1=top1, top5=top5))
+        output = (
+            '{flag} Results (Epoch {current}/{total}): Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
+            .format(flag=flag, top1=top1, top5=top5, current=epoch + 1, total=args.epochs)
+        )
         out_cls_acc = '%s Class Accuracy: %s' % (
         flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
         
