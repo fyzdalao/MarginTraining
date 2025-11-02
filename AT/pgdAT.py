@@ -187,7 +187,13 @@ def main():
                 targets = targets.to(device)
 
             optimizer.zero_grad()
+
+            #adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+            prev = model.training
+            model.eval()
             adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+            model.train(prev)
+
             outputs = model(adv)
             loss = criterion(outputs, targets)
             loss.backward()
@@ -226,7 +232,12 @@ def main():
                 _, predicted = outputs.max(1)
                 benign_correct += predicted.eq(targets).sum().item()
 
+                #adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+                prev = model.training
+                model.eval()
                 adv = adversary.perturb(inputs, targets, epsilon=args.epsilon, alpha=args.alpha, k=args.pgd_steps)
+                model.train(prev)
+
                 adv_outputs = model(adv)
                 loss = criterion(adv_outputs, targets)
                 adv_loss += loss.item()
