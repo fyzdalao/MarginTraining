@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from .basic import *
-
+#medium : 8~10M
 __all__ = ['vit_tiny', 'vit_small', 'vit_medium', 'vit_large', 'vit_base']
 
 class PatchEmbedding(nn.Module):
