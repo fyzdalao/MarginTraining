@@ -41,7 +41,7 @@ def parse_args():
    parser.add_argument('--batch_size', type=int, default=300)
    parser.add_argument('--seed', type=int, default=19260817)
    parser.add_argument('--eps', type=float, default=0.031)
-   parser.add_argument('--budget', type=int, default=250)
+   parser.add_argument('--budget', type=int, default=500)
 
    args = parser.parse_args()
    return args
