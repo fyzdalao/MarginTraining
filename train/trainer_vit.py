@@ -33,7 +33,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_medium', choice
                     help='model architecture: ' + ' | '.join(
                         model_names) + ' (default: vit_tiny，也可选择resnet34等ResNet模型进行对比)')
 parser.add_argument('--mode', default='norm', choices=['', 'norm', 'fix'], help='the mode of the last linear layer')
-parser.add_argument('--loss_type', default="CE", type=str, help='loss type')
+parser.add_argument('--loss_type', default="CE", type=str, help='loss type') #LMSoftmax
 parser.add_argument('-s', '--scale', default=5, type=int, help='the scale of logits')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
