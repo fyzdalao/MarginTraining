@@ -14,6 +14,7 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import networks
 from tensorboardX import SummaryWriter
@@ -22,27 +23,39 @@ from utils import *
 from losses import *
 
 model_names = sorted(name for name in networks.__dict__
-    if name.islower() and not name.startswith("__")
-    and callable(networks.__dict__[name]))
+                     if name.islower() and not name.startswith("__")
+                     and callable(networks.__dict__[name]))
 print(model_names)
 
 parser = argparse.ArgumentParser(description='PyTorch Visual Classification Training with ViT (兼容ViT和ResNet对比)')
 parser.add_argument('--dataset', default='cifar10', help='dataset setting')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_medium', choices=model_names,
-                     help='model architecture: ' + ' | '.join(model_names) + ' (default: vit_tiny，也可选择resnet34等ResNet模型进行对比)')
+                    help='model architecture: ' + ' | '.join(
+                        model_names) + ' (default: vit_tiny，也可选择resnet34等ResNet模型进行对比)')
 parser.add_argument('--mode', default='norm', choices=['', 'norm', 'fix'], help='the mode of the last linear layer')
 parser.add_argument('--loss_type', default="CE", type=str, help='loss type')
 parser.add_argument('-s', '--scale', default=5, type=int, help='the scale of logits')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N', help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=250, type=int, metavar='N', help='number of total epochs to run')
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument('--epochs', default=300, type=int, metavar='N', help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int, metavar='N',
-                    help='mini-batch size (default: 128 for ViT, ResNet可使用256)')
-parser.add_argument('--lr', '--learning-rate', default=0.02, type=float, metavar='LR',
-                    help='initial learning rate (default: 0.01 for ViT, ResNet可使用0.1)', dest='lr')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
-parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float, metavar='W', help='weight decay (default: 1e-4)', dest='weight_decay')
+parser.add_argument('-b', '--batch-size', default=512, type=int, metavar='N',
+                    help='mini-batch size (default: 512 for ViT)')
+parser.add_argument('--lr', '--learning-rate', default=7e-4, type=float, metavar='LR',
+                    help='maximum learning rate (default: 7e-4 for ViT with warmup)', dest='lr')
+parser.add_argument('--optimizer', default='AdamW', type=str, choices=['SGD', 'AdamW'],
+                    help='optimizer type (default: AdamW for ViT)')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum (for SGD)')
+parser.add_argument('--beta1', default=0.9, type=float, metavar='B1', help='beta1 for AdamW (default: 0.9)')
+parser.add_argument('--beta2', default=0.999, type=float, metavar='B2', help='beta2 for AdamW (default: 0.999)')
+parser.add_argument('--eps', default=1e-8, type=float, metavar='E', help='epsilon for AdamW (default: 1e-8)')
+parser.add_argument('--wd', '--weight-decay', default=0.05, type=float, metavar='W',
+                    help='weight decay (default: 0.05 for ViT with AdamW)', dest='weight_decay')
 parser.add_argument('--scheduler', default='Cos', type=str, help='The scheduler')
+parser.add_argument('--warmup-epochs', default=20, type=int, metavar='N',
+                    help='number of warmup epochs to linearly increase learning rate (default: 20 for ViT)')
+parser.add_argument('--eta-min', default=1e-6, type=float, metavar='M',
+                    help='minimum learning rate for cosine annealing (default: 1e-6)')
 parser.add_argument('-p', '--print-freq', default=10, type=int, metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true', help='evaluate model on validation set')
@@ -69,7 +82,59 @@ def norm_weights(weights):
     gravity = torch.sum(weights_norm, dim=0)
     return torch.sum(gravity ** 2)
 
+
+class WarmupLR(torch.optim.lr_scheduler._LRScheduler):
+    """
+    Warmup learning rate scheduler that linearly increases learning rate from 0 to target_lr
+    over warmup_epochs, then switches to the base scheduler.
+    """
+    def __init__(self, optimizer, warmup_epochs, base_scheduler):
+        self.warmup_epochs = warmup_epochs
+        self.base_scheduler = base_scheduler
+        self.finished_warmup = False
+        # Store base learning rates
+        self.base_lrs_backup = [group['lr'] for group in optimizer.param_groups]
+        super(WarmupLR, self).__init__(optimizer)
+        # Initialize learning rate to 0 for warmup
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = 0.0
+
+    def get_lr(self):
+        if self.last_epoch < self.warmup_epochs:
+            # Linear warmup: lr = base_lr * (last_epoch + 1) / warmup_epochs
+            # At epoch 0: lr = base_lr * 1 / warmup_epochs
+            # At epoch warmup_epochs-1: lr = base_lr * warmup_epochs / warmup_epochs = base_lr
+            return [base_lr * (self.last_epoch + 1) / self.warmup_epochs for base_lr in self.base_lrs_backup]
+        else:
+            # After warmup, use base scheduler
+            if not self.finished_warmup:
+                self.finished_warmup = True
+                # Reset base scheduler epoch count (warmup_epochs becomes epoch 0 for base scheduler)
+                self.base_scheduler.last_epoch = -1
+            return self.base_scheduler.get_last_lr()
+
+    def step(self, epoch=None):
+        if epoch is None:
+            epoch = self.last_epoch + 1
+        
+        if epoch < self.warmup_epochs:
+            # Warmup phase: update learning rate manually
+            self.last_epoch = epoch
+            for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+                param_group['lr'] = lr
+        else:
+            # After warmup, step base scheduler
+            if not self.finished_warmup:
+                self.finished_warmup = True
+                # Base scheduler starts from epoch 0 after warmup
+                self.base_scheduler.last_epoch = -1
+            self.base_scheduler.step(epoch - self.warmup_epochs)
+            self.last_epoch = epoch
+
+
 def main():
+    # Format learning rate for naming (replace dot with underscore, e.g., 0.1 -> 0_1, 0.01 -> 0_01)
+    lr_str = f"lr{str(args.lr).replace('.', '_')}"
     args.store_name = '_'.join([
         args.dataset,
         args.arch,
@@ -80,6 +145,7 @@ def main():
         args.scheduler,
         args.reg_type,
         str(args.reg),
+        lr_str,
         f'epochs{args.epochs}'
     ])
     args.dataset = args.dataset.lower()
@@ -95,6 +161,7 @@ def main():
                       'disable data parallelism.')
     ngpus_per_node = torch.cuda.device_count()
     main_worker(args.gpu, ngpus_per_node, args)
+
 
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
@@ -122,11 +189,43 @@ def main_worker(gpu, ngpus_per_node, args):
         model = model.cuda(args.gpu)
     else:
         model = torch.nn.DataParallel(model).cuda()
-    optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    if args.scheduler == 'Cos':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)
+    # Setup optimizer (AdamW for ViT, SGD for ResNet)
+    if args.optimizer == 'AdamW':
+        optimizer = torch.optim.AdamW(
+            model.parameters(), 
+            lr=args.lr, 
+            betas=(args.beta1, args.beta2),
+            eps=args.eps,
+            weight_decay=args.weight_decay
+        )
+        print(f"Using AdamW optimizer: lr={args.lr}, betas=({args.beta1}, {args.beta2}), eps={args.eps}, weight_decay={args.weight_decay}")
     else:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+        optimizer = torch.optim.SGD(
+            model.parameters(), 
+            lr=args.lr, 
+            momentum=args.momentum, 
+            weight_decay=args.weight_decay
+        )
+        print(f"Using SGD optimizer: lr={args.lr}, momentum={args.momentum}, weight_decay={args.weight_decay}")
+    
+    # Setup base scheduler
+    if args.scheduler == 'Cos':
+        base_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, 
+            T_max=args.epochs - args.warmup_epochs, 
+            eta_min=args.eta_min
+        )
+    else:
+        base_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+    
+    # Wrap with warmup if needed
+    if args.warmup_epochs > 0:
+        scheduler = WarmupLR(optimizer, args.warmup_epochs, base_scheduler)
+        print(f"Using warmup scheduler: {args.warmup_epochs} warmup epochs, then {args.scheduler} scheduler")
+        print(f"  Learning rate schedule: 0 -> {args.lr} (warmup) -> {args.eta_min} (cosine decay)")
+    else:
+        scheduler = base_scheduler
+        print(f"Using {args.scheduler} scheduler without warmup")
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -164,7 +263,8 @@ def main_worker(gpu, ngpus_per_node, args):
         transform_val = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(CIFAR_MEAN, CIFAR_STD)])
-        train_dataset = datasets.CIFAR10(root='../database/CIFAR10', train=True, download=True, transform=transform_train)
+        train_dataset = datasets.CIFAR10(root='../database/CIFAR10', train=True, download=True,
+                                         transform=transform_train)
         val_dataset = datasets.CIFAR10(root='../database/CIFAR10', train=False, download=True, transform=transform_val)
     elif args.dataset == 'cifar100':
         CIFAR_MEAN = [0.5071, 0.4865, 0.4409]
@@ -180,8 +280,9 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             transforms.Normalize(CIFAR_MEAN, CIFAR_STD)])
         train_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=True, download=True,
-                                         transform=transform_train)
-        val_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=False, download=True, transform=transform_val)
+                                          transform=transform_train)
+        val_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=False, download=True,
+                                        transform=transform_val)
     else:
         warnings.warn('Dataset is not listed!')
         return
@@ -218,8 +319,9 @@ def main_worker(gpu, ngpus_per_node, args):
     training_start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer)
-        scheduler.step()
-        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer, training_start_time=training_start_time)
+        scheduler.step(epoch)
+        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer,
+                        training_start_time=training_start_time)
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
         tf_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
@@ -241,6 +343,7 @@ def main_worker(gpu, ngpus_per_node, args):
     sis = get_margin(val_loader, model)
     tf_writer.add_histogram('similarity/test', sis)
 
+
 def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -252,7 +355,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
     model.train()
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
-        data_time.update(time.time()-end)
+        data_time.update(time.time() - end)
         if args.gpu is not None:
             input = input.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
@@ -368,7 +471,7 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
                           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                           'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                           'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
-                      'SaMargin {sample_margin.val:.3f} ({sample_margin.avg:.3f})'.format(
+                          'SaMargin {sample_margin.val:.3f} ({sample_margin.avg:.3f})'.format(
                     i, len(val_loader), batch_time=batch_time,
                     top1=top1, top5=top5, sample_margin=sample_margins))
                 print(output)
@@ -381,8 +484,8 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
             .format(flag=flag, top1=top1, top5=top5, current=epoch + 1, total=args.epochs)
         )
         out_cls_acc = '%s Class Accuracy: %s' % (
-        flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
-        
+            flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
+
         # Calculate and display total training time if start time is provided
         total_time_str = ''
         if training_start_time is not None:
@@ -392,7 +495,7 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
             seconds = int(total_elapsed % 60)
             total_time_str = 'Total Training Time: {:02d}:{:02d}:{:02d} ({:.1f}s)'.format(
                 hours, minutes, seconds, total_elapsed)
-        
+
         print(output)
         print(out_cls_acc)
         print('sample margin: ' + str(-sample_margins.avg))
@@ -413,7 +516,6 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
         tf_writer.add_scalars('acc/test_' + flag + '_cls_acc', {str(i): x for i, x in enumerate(cls_acc)}, epoch)
 
     return top1.avg
-
 
 
 if __name__ == '__main__':

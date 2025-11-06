@@ -19,6 +19,60 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import networks
 
 
+class WarmupLR(torch.optim.lr_scheduler._LRScheduler):
+    """
+    Warmup learning rate scheduler that linearly increases learning rate from 0 to target_lr
+    over warmup_epochs, then switches to the base scheduler or manual adjustment.
+    """
+    def __init__(self, optimizer, warmup_epochs, base_scheduler=None):
+        self.warmup_epochs = warmup_epochs
+        self.base_scheduler = base_scheduler
+        self.finished_warmup = False
+        # Store base learning rates
+        self.base_lrs_backup = [group['lr'] for group in optimizer.param_groups]
+        super(WarmupLR, self).__init__(optimizer)
+        # Initialize learning rate to 0 for warmup
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = 0.0
+
+    def get_lr(self):
+        if self.last_epoch < self.warmup_epochs:
+            # Linear warmup: lr = base_lr * (last_epoch + 1) / warmup_epochs
+            # At epoch 0: lr = base_lr * 1 / warmup_epochs
+            # At epoch warmup_epochs-1: lr = base_lr * warmup_epochs / warmup_epochs = base_lr
+            return [base_lr * (self.last_epoch + 1) / self.warmup_epochs for base_lr in self.base_lrs_backup]
+        else:
+            # After warmup, use base scheduler if available
+            if self.base_scheduler is not None:
+                if not self.finished_warmup:
+                    self.finished_warmup = True
+                    # Reset base scheduler epoch count (warmup_epochs becomes epoch 0 for base scheduler)
+                    self.base_scheduler.last_epoch = -1
+                return self.base_scheduler.get_last_lr()
+            else:
+                # No base scheduler, return original learning rates
+                return self.base_lrs_backup
+
+    def step(self, epoch=None):
+        if epoch is None:
+            epoch = self.last_epoch + 1
+        
+        if epoch < self.warmup_epochs:
+            # Warmup phase: update learning rate manually
+            self.last_epoch = epoch
+            for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+                param_group['lr'] = lr
+        else:
+            # After warmup, step base scheduler if available
+            if self.base_scheduler is not None:
+                if not self.finished_warmup:
+                    self.finished_warmup = True
+                    # Base scheduler starts from epoch 0 after warmup
+                    self.base_scheduler.last_epoch = -1
+                self.base_scheduler.step(epoch - self.warmup_epochs)
+            self.last_epoch = epoch
+
+
 def build_dataloaders(dataset: str, batch_size: int, workers: int):
     if dataset.lower() == 'cifar10':
         mean = [0.49139968, 0.48215827, 0.44653124]
@@ -113,6 +167,8 @@ def main():
     parser.add_argument('--weight-decay', default=2e-4, type=float)
     parser.add_argument('--scheduler', default='Original', choices=['Step', 'Cos', 'Original'], 
                         help='Original: manual LR decay at epoch 100 and 150')
+    parser.add_argument('--warmup-epochs', default=0, type=int, metavar='N',
+                        help='number of warmup epochs to linearly increase learning rate (default: 0)')
     parser.add_argument('--gpu', default=None, type=int)
     parser.add_argument('--out', default='viccheckpoint', type=str, help='checkpoint dir (like trainer)')
     parser.add_argument('--save-freq', default=20, type=int, help='save checkpoint every N epochs')
@@ -153,12 +209,19 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     
     # Setup scheduler (Original uses manual adjustment instead)
-    scheduler = None
+    base_scheduler = None
     if args.scheduler == 'Cos':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)
+        base_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs - args.warmup_epochs, eta_min=0.0)
     elif args.scheduler == 'Step':
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+        base_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
     # Original: manual LR adjustment at epoch 100 and 150 (implemented in training loop)
+    
+    # Wrap with warmup if needed
+    if args.warmup_epochs > 0:
+        scheduler = WarmupLR(optimizer, args.warmup_epochs, base_scheduler)
+        print(f"Using warmup scheduler: {args.warmup_epochs} warmup epochs, then {args.scheduler} scheduler")
+    else:
+        scheduler = base_scheduler
 
     best_acc1 = 0.0
     
@@ -329,9 +392,17 @@ def main():
     training_start_time = time.time()
     for epoch in range(0, args.epochs):
         epoch_start = time.time()
-        # Update learning rate at the start (Original schedule uses epoch number)
+        # Update learning rate at the start
         if args.scheduler == 'Original':
-            adjust_learning_rate(optimizer, epoch, args.lr)
+            # For Original scheduler with warmup, handle warmup manually
+            if args.warmup_epochs > 0 and epoch < args.warmup_epochs:
+                # Warmup phase: linear increase from 0 to args.lr
+                lr = args.lr * (epoch + 1) / args.warmup_epochs
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+            else:
+                # After warmup, use original schedule (adjust for warmup offset)
+                adjust_learning_rate(optimizer, epoch - args.warmup_epochs, args.lr)
         # Note: scheduler.step() for Cos/Step is called after training to follow PyTorch convention
         
         benign_acc, adv_acc, benign_loss, adv_loss = train(epoch)
@@ -340,7 +411,7 @@ def main():
         
         # Update learning rate scheduler after training (standard PyTorch convention)
         if args.scheduler != 'Original' and scheduler is not None:
-            scheduler.step()
+            scheduler.step(epoch)
         elapsed = time.time() - epoch_start
         epoch_time_msg = 'Epoch {} elapsed: {:.3f}s'.format(epoch, elapsed)
         print(epoch_time_msg)

@@ -67,6 +67,8 @@ def norm_weights(weights):
     return torch.sum(gravity ** 2)
 
 def main():
+    # Format learning rate for naming (replace dot with underscore, e.g., 0.1 -> 0_1, 0.01 -> 0_01)
+    lr_str = f"lr{str(args.lr).replace('.', '_')}"
     args.store_name = '_'.join([
         args.dataset,
         args.arch,
@@ -77,6 +79,7 @@ def main():
         args.scheduler,
         args.reg_type,
         str(args.reg),
+        lr_str,
         f'epochs{args.epochs}'
     ])
     args.dataset = args.dataset.lower()
