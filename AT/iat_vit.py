@@ -157,18 +157,27 @@ def main():
     parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_tiny', choices=model_names, 
                         help='模型架构，默认使用vit_tiny，也可选择resnet34等ResNet模型进行对比')
     parser.add_argument('--mode', default='', choices=['', 'norm', 'fix'])
-    parser.add_argument('-b', '--batch-size', default=256, type=int)
-    parser.add_argument('--epochs', default=200, type=int)
+    parser.add_argument('-b', '--batch-size', default=512, type=int,
+                        help='mini-batch size (default: 512 for ViT)')
+    parser.add_argument('--epochs', default=250, type=int,
+                        help='number of total epochs to run (default: 300 for ViT)')
     parser.add_argument('--workers', default=4, type=int)
-    # ViT通常需要更小的学习率，但这里保持与原代码一致，用户可以根据需要调整
-    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float, dest='lr', 
-                        help='学习率，ViT建议使用0.001-0.01，ResNet可使用0.1')
-    parser.add_argument('--momentum', default=0.9, type=float)
-    parser.add_argument('--weight-decay', default=2e-4, type=float)
-    parser.add_argument('--scheduler', default='Original', choices=['Step', 'Cos', 'Original'], 
-                        help='Original: manual LR decay at epoch 100 and 150')
-    parser.add_argument('--warmup-epochs', default=0, type=int, metavar='N',
-                        help='number of warmup epochs to linearly increase learning rate (default: 0)')
+    parser.add_argument('--lr', '--learning-rate', default=7e-4, type=float, dest='lr', 
+                        help='maximum learning rate (default: 7e-4 for ViT with warmup)')
+    parser.add_argument('--optimizer', default='AdamW', type=str, choices=['SGD', 'AdamW'],
+                        help='optimizer type (default: AdamW for ViT)')
+    parser.add_argument('--momentum', default=0.9, type=float, help='momentum (for SGD)')
+    parser.add_argument('--beta1', default=0.9, type=float, metavar='B1', help='beta1 for AdamW (default: 0.9)')
+    parser.add_argument('--beta2', default=0.999, type=float, metavar='B2', help='beta2 for AdamW (default: 0.999)')
+    parser.add_argument('--eps', default=1e-8, type=float, metavar='E', help='epsilon for AdamW (default: 1e-8)')
+    parser.add_argument('--weight-decay', default=0.05, type=float,
+                        help='weight decay (default: 0.05 for ViT with AdamW)')
+    parser.add_argument('--scheduler', default='Cos', choices=['Step', 'Cos', 'Original'], 
+                        help='Learning rate scheduler (default: Cos for ViT, Original: manual LR decay at epoch 100 and 150)')
+    parser.add_argument('--warmup-epochs', default=20, type=int, metavar='N',
+                        help='number of warmup epochs to linearly increase learning rate (default: 20 for ViT)')
+    parser.add_argument('--eta-min', default=1e-6, type=float, metavar='M',
+                        help='minimum learning rate for cosine annealing (default: 1e-6)')
     parser.add_argument('--gpu', default=None, type=int)
     parser.add_argument('--out', default='viccheckpoint', type=str, help='checkpoint dir (like trainer)')
     parser.add_argument('--save-freq', default=20, type=int, help='save checkpoint every N epochs')
@@ -206,12 +215,34 @@ def main():
 
     adversary = LinfPGDAttack(model)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    
+    # Setup optimizer (AdamW for ViT, SGD for ResNet)
+    if args.optimizer == 'AdamW':
+        optimizer = optim.AdamW(
+            model.parameters(), 
+            lr=args.lr, 
+            betas=(args.beta1, args.beta2),
+            eps=args.eps,
+            weight_decay=args.weight_decay
+        )
+        print(f"Using AdamW optimizer: lr={args.lr}, betas=({args.beta1}, {args.beta2}), eps={args.eps}, weight_decay={args.weight_decay}")
+    else:
+        optimizer = optim.SGD(
+            model.parameters(), 
+            lr=args.lr, 
+            momentum=args.momentum, 
+            weight_decay=args.weight_decay
+        )
+        print(f"Using SGD optimizer: lr={args.lr}, momentum={args.momentum}, weight_decay={args.weight_decay}")
     
     # Setup scheduler (Original uses manual adjustment instead)
     base_scheduler = None
     if args.scheduler == 'Cos':
-        base_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs - args.warmup_epochs, eta_min=0.0)
+        base_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, 
+            T_max=args.epochs - args.warmup_epochs, 
+            eta_min=args.eta_min
+        )
     elif args.scheduler == 'Step':
         base_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
     # Original: manual LR adjustment at epoch 100 and 150 (implemented in training loop)
@@ -220,8 +251,11 @@ def main():
     if args.warmup_epochs > 0:
         scheduler = WarmupLR(optimizer, args.warmup_epochs, base_scheduler)
         print(f"Using warmup scheduler: {args.warmup_epochs} warmup epochs, then {args.scheduler} scheduler")
+        print(f"  Learning rate schedule: 0 -> {args.lr} (warmup) -> {args.eta_min} (cosine decay)")
     else:
         scheduler = base_scheduler
+        if args.scheduler != 'Original':
+            print(f"Using {args.scheduler} scheduler without warmup")
 
     best_acc1 = 0.0
     
@@ -232,6 +266,8 @@ def main():
         if epoch >= 100:
             lr /= 10
         if epoch >= 150:
+            lr /= 10
+        if epoch >=200:
             lr /= 10
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
