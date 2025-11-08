@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .basic import *
 
 
-__all__ = ['wideresnet']
+__all__ = ['wideresnet', 'wideresnet28', 'wideresnet50']
 
 class WideBasic(nn.Module):
     expansion = 1
@@ -69,8 +69,16 @@ class WideResNet(Basic):
 
         return nn.Sequential(*layers)
 
-def wideresnet(depth=50, widen_factor=1, num_classes=10, norm=True, fixed=False, weight=None):
-    return WideResNet(WideBasic, depth=depth, widen_factor=widen_factor, num_classes=num_classes, norm=norm, fixed=fixed, weight=weight)
+def wideresnet(num_classes=10, mode='', weight=None, depth=28, widen_factor=10):
+    return WideResNet(WideBasic, depth=depth, widen_factor=widen_factor, num_classes=num_classes, mode=mode, weight=weight)
+
+
+def wideresnet28(num_classes=10, mode='', weight=None, widen_factor=10):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=28, widen_factor=widen_factor)
+
+
+def wideresnet50(num_classes=10, mode='', weight=None, widen_factor=10):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=50, widen_factor=widen_factor)
 
 
 if __name__ == '__main__':
