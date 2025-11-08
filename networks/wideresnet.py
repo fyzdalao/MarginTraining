@@ -10,7 +10,8 @@ __all__ = [
     'wideresnet28',
     'wideresnet28_8',
     'wideresnet40_6',
-    'wideresnet50'
+    'wideresnet50',
+    'wideresnet50_5'
 ]
 
 class WideBasic(nn.Module):
@@ -98,6 +99,10 @@ def wideresnet28_8(num_classes=10, mode='', weight=None):
 
 def wideresnet40_6(num_classes=10, mode='', weight=None):
     return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=40, widen_factor=6)
+
+
+def wideresnet50_5(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=50, widen_factor=5)
 
 
 if __name__ == '__main__':
