@@ -4,7 +4,14 @@ import torch.nn.functional as F
 from .basic import *
 
 
-__all__ = ['wideresnet', 'wideresnet28', 'wideresnet50']
+__all__ = [
+    'wideresnet',
+    'wideresnet22_10',
+    'wideresnet28',
+    'wideresnet28_8',
+    'wideresnet40_6',
+    'wideresnet50'
+]
 
 class WideBasic(nn.Module):
     expansion = 1
@@ -79,6 +86,18 @@ def wideresnet28(num_classes=10, mode='', weight=None, widen_factor=10):
 
 def wideresnet50(num_classes=10, mode='', weight=None, widen_factor=10):
     return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=50, widen_factor=widen_factor)
+
+
+def wideresnet22_10(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=22, widen_factor=10)
+
+
+def wideresnet28_8(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=28, widen_factor=8)
+
+
+def wideresnet40_6(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=40, widen_factor=6)
 
 
 if __name__ == '__main__':

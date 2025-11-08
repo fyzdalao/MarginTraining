@@ -51,6 +51,7 @@ parser.add_argument('--root_model', type=str, default='viccheckpoint')
 parser.add_argument('--exp_str', default='0', type=str, help='number to indicate which experiment it is')
 parser.add_argument('--reg_type', default='weight', type=str, help='regularization type')
 parser.add_argument('--reg', type=float, default=5, help='the weight of regularization term')
+parser.add_argument('--warmup-epochs', default=0, type=int, help='number of warm-up epochs (default: 0, disable warm-up)')
 best_acc1 = 0
 
 args = parser.parse_args()
@@ -65,6 +66,27 @@ def norm_weights(weights):
     weights_norm = F.normalize(weights, dim=1)
     gravity = torch.sum(weights_norm, dim=0)
     return torch.sum(gravity ** 2)
+
+def apply_warmup_lr(optimizer, epoch, batch_idx, num_batches, args):
+    if args.warmup_epochs <= 0:
+        return
+    total_iters = max(1, args.warmup_epochs * num_batches)
+    current_iter = epoch * num_batches + batch_idx + 1
+    if current_iter > total_iters:
+        return
+    warmup_lr = args.lr * current_iter / total_iters
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = warmup_lr
+
+def step_scheduler_with_warmup(scheduler, epoch, args):
+    if scheduler is None:
+        return
+    if args.warmup_epochs > 0:
+        if epoch < args.warmup_epochs:
+            return
+        scheduler.step(epoch - args.warmup_epochs)
+    else:
+        scheduler.step()
 
 def main():
     # Format learning rate for naming (replace dot with underscore, e.g., 0.1 -> 0_1, 0.01 -> 0_01)
@@ -124,7 +146,8 @@ def main_worker(gpu, ngpus_per_node, args):
         model = torch.nn.DataParallel(model).cuda()
     optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     if args.scheduler == 'Cos':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0.0)
+        t_max = max(1, args.epochs - args.warmup_epochs) if args.warmup_epochs > 0 else args.epochs
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=0.0)
     else:
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
     # optionally resume from a checkpoint
@@ -218,7 +241,7 @@ def main_worker(gpu, ngpus_per_node, args):
     training_start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer)
-        scheduler.step()
+        step_scheduler_with_warmup(scheduler, epoch, args)
         acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer, training_start_time=training_start_time)
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
@@ -251,8 +274,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
     sample_margin = SampleMarginLoss()
     model.train()
     end = time.time()
+    num_batches = len(train_loader)
     for i, (input, target) in enumerate(train_loader):
         data_time.update(time.time()-end)
+        apply_warmup_lr(optimizer, epoch, i, num_batches, args)
         if args.gpu is not None:
             input = input.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
