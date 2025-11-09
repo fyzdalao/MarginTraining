@@ -10,8 +10,20 @@ __all__ = [
     'wideresnet28',
     'wideresnet28_8',
     'wideresnet40_6',
+    'wideresnet40_7',
+    'wideresnet44_6',
+    'wideresnet46_6',
     'wideresnet50',
-    'wideresnet50_5'
+    'wideresnet50_5',
+    'wideresnet52_5',
+    'wideresnet54_5',
+    'wideresnet56_5',
+    'wideresnet58_5',
+    'wideresnet70_4',
+    'wideresnet72_4',
+    'wideresnet76_4',
+    'wideresnet80_4',
+    'wideresnet82_4'
 ]
 
 class WideBasic(nn.Module):
@@ -100,9 +112,47 @@ def wideresnet28_8(num_classes=10, mode='', weight=None):
 def wideresnet40_6(num_classes=10, mode='', weight=None):
     return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=40, widen_factor=6)
 
+def wideresnet40_7(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=40, widen_factor=7)
+
+def wideresnet44_6(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=44, widen_factor=6)
+
+def wideresnet46_6(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=46, widen_factor=6)
+
 
 def wideresnet50_5(num_classes=10, mode='', weight=None):
     return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=50, widen_factor=5)
+
+def wideresnet52_5(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=52, widen_factor=5)
+
+def wideresnet54_5(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=54, widen_factor=5)
+
+def wideresnet56_5(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=56, widen_factor=5)
+
+def wideresnet58_5(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=58, widen_factor=5)
+
+
+def wideresnet70_4(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=70, widen_factor=4)
+
+def wideresnet72_4(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=72, widen_factor=4)
+
+
+def wideresnet76_4(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=76, widen_factor=4)
+
+def wideresnet80_4(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=80, widen_factor=4)
+
+def wideresnet82_4(num_classes=10, mode='', weight=None):
+    return wideresnet(num_classes=num_classes, mode=mode, weight=weight, depth=82, widen_factor=4)
 
 
 if __name__ == '__main__':

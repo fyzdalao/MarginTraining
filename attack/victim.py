@@ -36,14 +36,23 @@ class Model(nn.Module):
         # 创建模型
         model = networks.__dict__[self.arch](num_classes=num_classes, mode=mode, weight=weight)
         #checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint,'ckpt.best.pth.tar')  # 参数文件路径
-        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint)
+        checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint,
+                                       'ckpt_ep250.best.pth.tar')  # 参数文件路径
+        #checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'checkpoint_server', self.args.checkpoint)
 
         # 加载参数
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        if 'state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['state_dict'])
-        else:
-            model.load_state_dict(checkpoint)
+        state_dict = checkpoint['state_dict'] if isinstance(checkpoint, dict) and 'state_dict' in checkpoint else checkpoint
+        try:
+            model.load_state_dict(state_dict)
+        except RuntimeError as err:
+            err_msg = str(err)
+            if 'Missing key(s) in state_dict: "linear.bias"' in err_msg:
+                # 重建使用 norm 模式的最后一层（无 bias）
+                model = networks.__dict__[self.arch](num_classes=num_classes, mode='norm', weight=weight)
+                model.load_state_dict(state_dict)
+            else:
+                raise
         self.cnn = model.to(self.device).eval()
 
 
