@@ -11,7 +11,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 def format_legend_label(label: str) -> str:
     """格式化图例标签：去掉数字、移除'w'，并将结尾的'm'替换为 Latex 表示。"""
-    formatted = re.sub(r'^\d+', '', label)
+    formatted = re.sub(r'^[\d-]+', '', label)
     formatted = formatted.replace('w', '')
     if formatted.endswith('m'):
         formatted = formatted[:-1] + r'$+R_{\text{sm}}$'
@@ -446,19 +446,93 @@ if __name__ == '__main__':
     labels_101 = ['101CEw', '101CEm', '101LMw', '101LMm', '101AT']
     display_labels_101 = [format_legend_label(label) for label in labels_101]
 
+    curve_configs_22_10 = [
+        ['22-10CEw1', '22-10CEw2', '22-10CEw3'],
+        ['22-10CEm1', '22-10CEm2', '22-10CEm3'],
+        ['22-10LMw1', '22-10LMw2', '22-10LMw3'],
+        ['22-10LMm1', '22-10LMm2', '22-10LMm3']
+    ]
+    labels_22_10 = ['22-10CEw', '22-10CEm', '22-10LMw', '22-10LMm']
+    display_labels_22_10 = [format_legend_label(label) for label in labels_22_10]
+
+    curve_configs_28_8 = [
+        ['28-8CEw1', '28-8CEw2', '28-8CEw3'],
+        ['28-8CEm1', '28-8CEm2', '28-8CEm3'],
+        ['28-8LMw1', '28-8LMw2', '28-8LMw3'],
+        ['28-8LMm1', '28-8LMm2', '28-8LMm3']
+    ]
+    labels_28_8 = ['28-8CEw', '28-8CEm', '28-8LMw', '28-8LMm']
+    display_labels_28_8 = [format_legend_label(label) for label in labels_28_8]
+
+
+    curve_configs_40_6 = [
+        ['40-6CEw1', '40-6CEw2', '40-6CEw3'],
+        ['40-6CEm1', '40-6CEm2', '40-6CEm3'],
+        ['40-6LMw1', '40-6LMw2', '40-6LMw3'],
+        ['40-6LMm1', '40-6LMm2', '40-6LMm3']
+    ]
+    labels_40_6 = ['40-6CEw', '40-6CEm', '40-6LMw', '40-6LMm']
+    display_labels_40_6 = [format_legend_label(label) for label in labels_40_6]
+
+    curve_configs_46_6 = [
+        ['46-6CEw1', '46-6CEw2', '46-6CEw3'],
+        ['46-6CEm1', '46-6CEm2', '46-6CEm3'],
+        ['46-6LMw1', '46-6LMw2', '46-6LMw3'],
+        ['46-6LMm1', '46-6LMm2', '46-6LMm3']
+    ]
+    labels_46_6 = ['46-6CEw', '46-6CEm', '46-6LMw', '46-6LMm']
+    display_labels_46_6 = [format_legend_label(label) for label in labels_46_6]
+
+    curve_configs_58_5 = [
+        ['58-5CEw1', '58-5CEw2', '58-5CEw3'],
+        ['58-5CEm1', '58-5CEm2', '58-5CEm3'],
+        ['58-5LMw1', '58-5LMw2', '58-5LMw3'],
+        ['58-5LMm1', '58-5LMm2', '58-5LMm3']
+    ]
+    labels_58_5 = ['58-5CEw', '58-5CEm', '58-5LMw', '58-5LMm']
+    display_labels_58_5 = [format_legend_label(label) for label in labels_58_5]
+
+    curve_configs_82_4 = [
+        ['82-4CEw1', '82-4CEw2', '82-4CEw3'],
+        ['82-4CEm1', '82-4CEm2', '82-4CEm3'],
+        ['82-4LMw1', '82-4LMw2', '82-4LMw3'],
+        ['82-4LMm1', '82-4LMm2', '82-4LMm3']
+    ]
+    labels_82_4 = ['82-4CEw', '82-4CEm', '82-4LMw', '82-4LMm']
+    display_labels_82_4 = [format_legend_label(label) for label in labels_82_4]
+
+
+
+    # # 计算统一的纵轴范围
+    # global_y_limits = compute_error_rate_range(
+    #     [curve_configs_34, curve_configs_50, curve_configs_101],
+    #     log_dir='log_for_plot'
+    # )
+
     # 计算统一的纵轴范围
     global_y_limits = compute_error_rate_range(
-        [curve_configs_34, curve_configs_50, curve_configs_101],
+        [curve_configs_22_10, curve_configs_28_8, curve_configs_40_6,
+         curve_configs_46_6, curve_configs_58_5, curve_configs_82_4],
         log_dir='log_for_plot'
     )
 
     # 依次绘制三组图像
-    plot_curves(curve_configs_34, log_dir='log_for_plot', labels=display_labels_34, colors=method_colors, y_limits=global_y_limits, save_name='resnet34_curves.pdf')
-    plot_curves(curve_configs_50, log_dir='log_for_plot', labels=display_labels_50, colors=method_colors, y_limits=global_y_limits, save_name='resnet50_curves.pdf')
-    plot_curves(curve_configs_101, log_dir='log_for_plot', labels=display_labels_101, colors=method_colors, y_limits=global_y_limits, save_name='resnet101_curves.pdf')
+    # plot_curves(curve_configs_34, log_dir='log_for_plot', labels=display_labels_34, colors=method_colors, y_limits=global_y_limits, save_name='resnet34_curves.pdf')
+    # plot_curves(curve_configs_50, log_dir='log_for_plot', labels=display_labels_50, colors=method_colors, y_limits=global_y_limits, save_name='resnet50_curves.pdf')
+    # plot_curves(curve_configs_101, log_dir='log_for_plot', labels=display_labels_101, colors=method_colors, y_limits=global_y_limits, save_name='resnet101_curves.pdf')
 
-
-
+    plot_curves(curve_configs_22_10, log_dir='log_for_plot', labels=display_labels_22_10, colors=method_colors,
+                y_limits=global_y_limits, save_name='WRN22-10_curves.pdf')
+    plot_curves(curve_configs_28_8, log_dir='log_for_plot', labels=display_labels_28_8, colors=method_colors,
+                y_limits=global_y_limits, save_name='WRN28-8_curves.pdf')
+    plot_curves(curve_configs_40_6, log_dir='log_for_plot', labels=display_labels_40_6, colors=method_colors,
+                y_limits=global_y_limits, save_name='WRN40-6_curves.pdf')
+    plot_curves(curve_configs_46_6, log_dir='log_for_plot', labels=display_labels_46_6, colors=method_colors,
+                y_limits=global_y_limits, save_name='WRN46-6_curves.pdf')
+    plot_curves(curve_configs_58_5, log_dir='log_for_plot', labels=display_labels_58_5, colors=method_colors,
+                y_limits=global_y_limits, save_name='WRN58-5_curves.pdf')
+    plot_curves(curve_configs_82_4, log_dir='log_for_plot', labels=display_labels_82_4, colors=method_colors,
+                y_limits=global_y_limits, save_name='WRN82-4_curves.pdf')
 
 
 
