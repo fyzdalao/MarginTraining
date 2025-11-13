@@ -25,6 +25,7 @@ from tensorboardX import SummaryWriter
 from sklearn.metrics import confusion_matrix
 from utils import *
 from losses import *
+from torch.cuda.amp import autocast, GradScaler
 
 model_names = sorted(name for name in networks.__dict__
     if name.islower() and not name.startswith("__")
@@ -37,7 +38,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet34', choices=
 parser.add_argument('--mode', default='norm', choices=['', 'norm', 'fix'], help='the mode of the last linear layer')
 parser.add_argument('--loss_type', default="CE", type=str, help='loss type')
 parser.add_argument('-s', '--scale', default=5, type=int, help='the scale of logits')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N', help='number of data loading workers (default: 4)')
+parser.add_argument('-j', '--workers', default=8, type=int, metavar='N', help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=250, type=int, metavar='N', help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch-size', default=256, type=int, metavar='N', help='mini-batch size')
@@ -45,7 +46,7 @@ parser.add_argument('--lr', '--learning-rate', default=0.1, type=float, metavar=
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float, metavar='W', help='weight decay (default: 1e-4)', dest='weight_decay')
 parser.add_argument('--scheduler', default='Cos', type=str, help='The scheduler')
-parser.add_argument('-p', '--print-freq', default=10, type=int, metavar='N', help='print frequency (default: 10)')
+parser.add_argument('-p', '--print-freq', default=500, type=int, metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true', help='evaluate model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true', help='use pre-trained model')
@@ -54,7 +55,6 @@ parser.add_argument('--deterministic', dest='use_seed', action='store_true',
                     help='Fix random seeds for reproducibility (default behaviour).')
 parser.add_argument('--random-init', dest='use_seed', action='store_false',
                     help='Disable fixed seeds for potentially faster but non-deterministic training.')
-parser.set_defaults(use_seed=True)
 parser.add_argument('--gpu', default=0, type=int, help='GPU id to use.')
 parser.add_argument('--root_log', type=str, default='viclog')
 parser.add_argument('--root_model', type=str, default='viccheckpoint')
@@ -62,9 +62,16 @@ parser.add_argument('--exp_str', default='0', type=str, help='number to indicate
 parser.add_argument('--reg_type', default='weight', type=str, help='regularization type')
 parser.add_argument('--reg', type=float, default=5, help='the weight of regularization term')
 parser.add_argument('--warmup-epochs', default=0, type=int, help='number of warm-up epochs (default: 0, disable warm-up)')
+parser.add_argument('--amp', dest='amp', action='store_true', help='Enable Automatic Mixed Precision training.')
+parser.add_argument('--no-amp', dest='amp', action='store_false', help='Disable Automatic Mixed Precision training.')
+parser.set_defaults(use_seed=True, amp=False)
 best_acc1 = 0
 
 args = parser.parse_args()
+
+if args.amp and not torch.cuda.is_available():
+    warnings.warn('AMP requested but CUDA is not available; disabling AMP.')
+    args.amp = False
 
 if args.use_seed:
     random.seed(args.seed)
@@ -264,6 +271,7 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         model = torch.nn.DataParallel(model).cuda()
     optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    scaler = GradScaler(enabled=args.amp and torch.cuda.is_available())
     if args.scheduler == 'Cos':
         t_max = max(1, args.epochs - args.warmup_epochs) if args.warmup_epochs > 0 else args.epochs
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=0.0)
@@ -281,6 +289,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 best_acc1 = best_acc1.to(args.gpu)
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
+            if 'scaler' in checkpoint and checkpoint['scaler'] is not None and scaler is not None and scaler.is_enabled():
+                scaler.load_state_dict(checkpoint['scaler'])
             print("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
@@ -379,7 +389,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # Record training start time for total elapsed time tracking
     training_start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer)
+        train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer, scaler)
         step_scheduler_with_warmup(scheduler, epoch, args)
         acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer, training_start_time=training_start_time)
         is_best = acc1 > best_acc1
@@ -396,6 +406,7 @@ def main_worker(gpu, ngpus_per_node, args):
             'state_dict': model.state_dict(),
             'best_acc1': best_acc1,
             'optimizer': optimizer.state_dict(),
+            'scaler': scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
         }, is_best)
 
     sis = get_margin(train_loader, model)
@@ -403,7 +414,7 @@ def main_worker(gpu, ngpus_per_node, args):
     sis = get_margin(val_loader, model)
     tf_writer.add_histogram('similarity/test', sis)
 
-def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer):
+def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer, scaler):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -420,40 +431,48 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
         if args.gpu is not None:
             input = input.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
-        if args.loss_type in ['L_Softmax', 'SphereFace']:
-            embedding = model.get_body(input)
-            weight = model.get_weight()
-            loss = criterion(weight, embedding, target)
-            output = F.linear(embedding, weight)
-            weight_norm = F.normalize(weight, dim=1)
-            embedding_norm = F.normalize(embedding, dim=1)
-            output_norm = F.linear(embedding_norm, weight_norm)
-            sm = sample_margin(output_norm, target)
-        else:
-            embedding = model.get_body(input)
-            weight = model.get_weight()
-            output = model.linear(embedding)
-            weight_norm = F.normalize(weight, dim=1)
-            embedding_norm = F.normalize(embedding, dim=1)
-            output_norm = F.linear(embedding_norm, weight_norm)
-            sm = sample_margin(output_norm, target)
-            if args.reg_type == 'weight':
-                reg = norm_weights(weight)
-            elif args.reg_type == 'margin':
-                reg = sm
+        optimizer.zero_grad()
+        with autocast(enabled=args.amp and torch.cuda.is_available()):
+            if args.loss_type in ['L_Softmax', 'SphereFace']:
+                embedding = model.get_body(input)
+                weight = model.get_weight()
+                loss = criterion(weight, embedding, target)
+                output = F.linear(embedding, weight)
+                weight_norm = F.normalize(weight, dim=1)
+                embedding_norm = F.normalize(embedding, dim=1)
+                output_norm = F.linear(embedding_norm, weight_norm)
+                sm = sample_margin(output_norm, target)
             else:
-                reg = 0
-            loss = criterion(output, target) + args.reg * reg
+                embedding = model.get_body(input)
+                weight = model.get_weight()
+                output = model.linear(embedding)
+                weight_norm = F.normalize(weight, dim=1)
+                embedding_norm = F.normalize(embedding, dim=1)
+                output_norm = F.linear(embedding_norm, weight_norm)
+                sm = sample_margin(output_norm, target)
+                if args.reg_type == 'weight':
+                    reg = norm_weights(weight)
+                elif args.reg_type == 'margin':
+                    reg = sm
+                else:
+                    reg = 0
+                loss = criterion(output, target) + args.reg * reg
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
         sample_margins.update(sm.item(), input.size(0))
         top1.update(acc1[0], input.size(0))
         top5.update(acc5[0], input.size(0))
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-        optimizer.step()
+        if scaler is not None and scaler.is_enabled():
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            optimizer.step()
 
         batch_time.update(time.time() - end)
         end = time.time()
@@ -506,13 +525,14 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
             target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            embedding = model.get_body(input)
-            weight = model.get_weight()
-            output = model.linear(embedding)
-            embedding_norm = F.normalize(embedding)
-            weight_norm = F.normalize(weight)
-            output_norm = F.linear(embedding_norm, weight_norm)
-            sm = sample_margin(output_norm, target)
+            with autocast(enabled=args.amp and torch.cuda.is_available()):
+                embedding = model.get_body(input)
+                weight = model.get_weight()
+                output = model.linear(embedding)
+                embedding_norm = F.normalize(embedding)
+                weight_norm = F.normalize(weight)
+                output_norm = F.linear(embedding_norm, weight_norm)
+                sm = sample_margin(output_norm, target)
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             sample_margins.update(sm.item(), input.size(0))
