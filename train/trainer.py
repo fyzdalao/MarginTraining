@@ -4,6 +4,9 @@ import random
 import time
 import warnings
 import sys
+import zipfile
+import urllib.request
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,6 +17,8 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+from torchvision.datasets.folder import default_loader
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import networks
 from tensorboardX import SummaryWriter
@@ -44,7 +49,12 @@ parser.add_argument('-p', '--print-freq', default=10, type=int, metavar='N', hel
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true', help='evaluate model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true', help='use pre-trained model')
-parser.add_argument('--seed', default=123, type=int, help='seed for initializing training. ')
+parser.add_argument('--seed', default=123, type=int, help='seed for initializing training when deterministic mode is enabled.')
+parser.add_argument('--deterministic', dest='use_seed', action='store_true',
+                    help='Fix random seeds for reproducibility (default behaviour).')
+parser.add_argument('--random-init', dest='use_seed', action='store_false',
+                    help='Disable fixed seeds for potentially faster but non-deterministic training.')
+parser.set_defaults(use_seed=True)
 parser.add_argument('--gpu', default=0, type=int, help='GPU id to use.')
 parser.add_argument('--root_log', type=str, default='viclog')
 parser.add_argument('--root_model', type=str, default='viccheckpoint')
@@ -56,10 +66,17 @@ best_acc1 = 0
 
 args = parser.parse_args()
 
-random.seed(args.seed)
-np.random.seed(args.seed)
-torch.manual_seed(args.seed)
-torch.cuda.manual_seed(args.seed)
+if args.use_seed:
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    cudnn.deterministic = True
+    cudnn.benchmark = False
+else:
+    cudnn.deterministic = False
+    cudnn.benchmark = True
 
 
 def norm_weights(weights):
@@ -88,6 +105,102 @@ def step_scheduler_with_warmup(scheduler, epoch, args):
     else:
         scheduler.step()
 
+TINY_IMAGENET_URL = 'http://cs231n.stanford.edu/tiny-imagenet-200.zip'
+TINY_IMAGENET_ARCHIVE = 'tiny-imagenet-200.zip'
+
+
+def download_and_prepare_tinyimagenet(root):
+    dataset_dir = os.path.join(root, 'tiny-imagenet-200')
+    if os.path.isdir(dataset_dir):
+        return dataset_dir
+
+    os.makedirs(root, exist_ok=True)
+    archive_path = os.path.join(root, TINY_IMAGENET_ARCHIVE)
+
+    if not os.path.isfile(archive_path):
+        print(f"Downloading TinyImageNet from {TINY_IMAGENET_URL} ...")
+        try:
+            urllib.request.urlretrieve(TINY_IMAGENET_URL, archive_path)
+        except Exception as exc:
+            raise RuntimeError(f'Failed to download TinyImageNet: {exc}') from exc
+
+    print(f"Extracting {archive_path} ...")
+    with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+        zip_ref.extractall(root)
+
+    return dataset_dir
+
+
+class TinyImageNetValDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset_root, transform, wnid_to_idx):
+        self.transform = transform
+        self.loader = default_loader
+        val_dir = os.path.join(dataset_root, 'val')
+        images_dir = os.path.join(val_dir, 'images')
+        annotation_path = os.path.join(val_dir, 'val_annotations.txt')
+
+        if not os.path.exists(annotation_path):
+            raise FileNotFoundError(f'Cannot find TinyImageNet validation annotations at {annotation_path}')
+
+        self.samples = []
+        with open(annotation_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) < 2:
+                    continue
+                image_name, wnid = parts[0], parts[1]
+                image_path = os.path.join(images_dir, image_name)
+                if not os.path.exists(image_path):
+                    continue
+                label = wnid_to_idx[wnid]
+                self.samples.append((image_path, label))
+
+        if not self.samples:
+            raise RuntimeError('TinyImageNet validation set appears to be empty.')
+
+        self.targets = [label for _, label in self.samples]
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        img = self.loader(path)
+        if self.transform is not None:
+            img = self.transform(img)
+        return img, target
+
+
+def get_tinyimagenet_datasets(root, transform_train, transform_val):
+    dataset_dir = download_and_prepare_tinyimagenet(root)
+    wnids_path = os.path.join(dataset_dir, 'wnids.txt')
+    if not os.path.exists(wnids_path):
+        raise FileNotFoundError(f'Cannot find TinyImageNet wnids file at {wnids_path}')
+
+    with open(wnids_path, 'r') as f:
+        wnids = [line.strip() for line in f if line.strip()]
+    wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+
+    train_dir = os.path.join(dataset_dir, 'train')
+    train_dataset = datasets.ImageFolder(train_dir, transform=transform_train)
+
+    remapped_samples = []
+    remapped_targets = []
+    for path, target in train_dataset.samples:
+        wnid = train_dataset.classes[target]
+        mapped_target = wnid_to_idx[wnid]
+        remapped_samples.append((path, mapped_target))
+        remapped_targets.append(mapped_target)
+
+    train_dataset.samples = remapped_samples
+    train_dataset.imgs = remapped_samples
+    train_dataset.targets = remapped_targets
+    train_dataset.classes = wnids
+    train_dataset.class_to_idx = wnid_to_idx
+
+    val_dataset = TinyImageNetValDataset(dataset_dir, transform_val, wnid_to_idx)
+    return train_dataset, val_dataset
+
 def main():
     # Format learning rate for naming (replace dot with underscore, e.g., 0.1 -> 0_1, 0.01 -> 0_01)
     lr_str = f"lr{str(args.lr).replace('.', '_')}"
@@ -107,11 +220,12 @@ def main():
     args.dataset = args.dataset.lower()
     print(args)
     prepare_folders(args)
-    warnings.warn('You have chosen to seed training.'
-                  'This will turn on the CUDNN deterministic setting.'
-                  'which can slow down your training considerably! '
-                  'You may see unexpected behavior when restarting '
-                  'from checkpoints')
+    if args.use_seed:
+        warnings.warn('You have chosen to seed training.'
+                      'This will turn on the CUDNN deterministic setting.'
+                      'which can slow down your training considerably! '
+                      'You may see unexpected behavior when restarting '
+                      'from checkpoints')
     if args.gpu is not None:
         warnings.warn('You have chosen a specific GPU. This will completely '
                       'disable data parallelism.')
@@ -125,7 +239,12 @@ def main_worker(gpu, ngpus_per_node, args):
         print('Use GPU: {} for training'.format(args.arch))
     # create model
     print("=> creating model '{}'".format(args.arch))
-    num_classes = 100 if args.dataset == 'cifar100' else 10
+    if args.dataset == 'cifar100':
+        num_classes = 100
+    elif args.dataset == 'tinyimagenet':
+        num_classes = 200
+    else:
+        num_classes = 10
     mode = args.mode
     if args.loss_type in ['CE', 'Focal', 'L_Softmax', 'SphereFace']:
         mode = ''
@@ -165,7 +284,10 @@ def main_worker(gpu, ngpus_per_node, args):
             print("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
-    cudnn.benchmark = True
+    if args.use_seed:
+        cudnn.benchmark = False
+    else:
+        cudnn.benchmark = True
 
     if args.dataset == 'mnist' or args.dataset == 'MNIST':
         MEAN = [0.1307]
@@ -205,6 +327,23 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=True, download=True,
                                          transform=transform_train)
         val_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=False, download=True, transform=transform_val)
+    elif args.dataset == 'tinyimagenet':
+        TINY_MEAN = [0.4802, 0.4481, 0.3975]
+        TINY_STD = [0.2302, 0.2265, 0.2262]
+        transform_train = transforms.Compose([
+            transforms.RandomCrop(64, padding=8),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(20),
+            transforms.ToTensor(),
+            transforms.Normalize(TINY_MEAN, TINY_STD)])
+
+        transform_val = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(TINY_MEAN, TINY_STD)])
+        tiny_root = os.path.join('../database', 'TinyImageNet')
+        train_dataset, val_dataset = get_tinyimagenet_datasets(
+            tiny_root, transform_train=transform_train, transform_val=transform_val
+        )
     else:
         warnings.warn('Dataset is not listed!')
         return

@@ -16,7 +16,15 @@ def load_model(args):
    return model
 
 def load_data(args):
-   x_test, y_test = sample_cifar10_every_class(random_seed=args.data_seed, data_amount=args.data_amount)
+   dataset = args.dataset.lower()
+   if dataset == 'cifar10':
+      x_test, y_test = sample_cifar10_every_class(random_seed=args.data_seed, data_amount=args.data_amount)
+   elif dataset == 'cifar100':
+      x_test, y_test = sample_cifar100_every_class(random_seed=args.data_seed, data_amount=args.data_amount)
+   elif dataset == 'tinyimagenet':
+      x_test, y_test = sample_tinyimagenet_every_class(random_seed=args.data_seed, data_amount=args.data_amount)
+   else:
+      raise ValueError(f'不支持的数据集: {args.dataset}')
    return x_test, y_test
 
 def try_the_model(model, x_test, y_test, log=None):

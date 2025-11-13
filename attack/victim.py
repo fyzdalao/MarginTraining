@@ -15,21 +15,33 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.args = args
         self.arch = args.arch
+        self.dataset = args.dataset.lower()
         self.device = torch.device(args.device)
 
         self.get_cnn()
 
         self.batch_size = args.batch_size
 
-        if args.dataset == 'cifar10':
+        if self.dataset == 'cifar10':
             self.mean = np.reshape([0.49139968, 0.48215827, 0.44653124], [1, 3, 1, 1])
             self.std = np.reshape([0.24703233, 0.24348505, 0.26158768], [1, 3, 1, 1])
+        elif self.dataset == 'cifar100':
+            self.mean = np.reshape([0.5071, 0.4865, 0.4409], [1, 3, 1, 1])
+            self.std = np.reshape([0.2673, 0.2564, 0.2762], [1, 3, 1, 1])
+        elif self.dataset == 'tinyimagenet':
+            self.mean = np.reshape([0.4802, 0.4481, 0.3975], [1, 3, 1, 1])
+            self.std = np.reshape([0.2302, 0.2265, 0.2262], [1, 3, 1, 1])
         else:
-            warnings.warn('Unknown dataset, mean and std are not computed')
+            raise ValueError(f'Unknown dataset: {self.dataset}')
 
 
     def get_cnn(self):
-        num_classes = 10  # 根据数据集设置类别数
+        if self.dataset == 'cifar100':
+            num_classes = 100
+        elif self.dataset == 'tinyimagenet':
+            num_classes = 200
+        else:
+            num_classes = 10
         mode = ''  # 根据需要设置mode
         weight = None  # 根据需要设置weight
 
