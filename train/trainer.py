@@ -398,7 +398,6 @@ def main_worker(gpu, ngpus_per_node, args):
         drop_last=False,
         **loader_common_args
     )
-    log_training = open(os.path.join(args.root_log, args.store_name, 'log_train.csv'), 'w')
     log_testing = open(os.path.join(args.root_log, args.store_name, 'log_test.csv'), 'w')
     with open(os.path.join(args.root_log, args.store_name, 'args.txt'), 'w') as f:
         f.write(str(args))
@@ -421,21 +420,15 @@ def main_worker(gpu, ngpus_per_node, args):
     # tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
     tf_writer = None
     # Record training start time for total elapsed time tracking
-    training_start_time = time.time()
     pending_checkpoints = []
     for epoch in range(args.start_epoch, args.epochs):
-        train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer, scaler)
+        train(train_loader, model, criterion, optimizer, epoch, args, tf_writer, scaler)
         step_scheduler_with_warmup(scheduler, epoch, args)
-        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer, training_start_time=training_start_time)
+        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer)
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
         # if tf_writer is not None:
         #     tf_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
-        output_best = 'Best Prec@1: %.3f\n' % (best_acc1)
-        print(output_best)
-        log_testing.write(output_best + '\n')
-        log_testing.flush()
-
         # 原始每个 epoch 都保存的逻辑：
         # save_checkpoint(args, {
         #     'epoch': epoch + 1,
@@ -483,13 +476,13 @@ def main_worker(gpu, ngpus_per_node, args):
     # if tf_writer is not None:
     #     tf_writer.add_histogram('similarity/test', sis)
 
-def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer, scaler):
+def train(train_loader, model, criterion, optimizer, epoch, args, tf_writer, scaler):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    sample_margin = SampleMarginLoss()
+    sample_margin = SampleMarginLoss() if args.reg_type == 'margin' else None
     model.train()
     end = time.time()
     num_batches = len(train_loader)
@@ -507,7 +500,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
                 loss = criterion(weight, embedding, target)
                 output = F.linear(embedding, weight)
                 sm = None
-                if args.reg_type == 'margin':
+                if args.reg_type == 'margin' and sample_margin is not None:
                     weight_norm = F.normalize(weight, dim=1)
                     embedding_norm = F.normalize(embedding, dim=1)
                     output_norm = F.linear(embedding_norm, weight_norm)
@@ -517,7 +510,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
                 weight = model.get_weight()
                 output = model.linear(embedding)
                 sm = None
-                if args.reg_type == 'margin':
+                if args.reg_type == 'margin' and sample_margin is not None:
                     weight_norm = F.normalize(weight, dim=1)
                     embedding_norm = F.normalize(embedding, dim=1)
                     output_norm = F.linear(embedding_norm, weight_norm)
@@ -562,12 +555,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
         #     log.write(output + '\n')
         #     log.flush()
     # margin, ratio = model.margin()
-    output = (
-        f"\nEpoch [{epoch}/{args.epochs}]:\t loss={losses.avg:.4f}\t Prec@1={top1.avg:.4f}\t Prec@5={top5.avg:.4f}\n"
-    )
-    print(output)
-    log.write(output)
-    log.flush()
+    return losses.avg, top1.avg, top5.avg
     # if tf_writer is not None:
     #     tf_writer.add_scalar('loss/train', losses.avg, epoch)
     #     tf_writer.add_scalar('acc/train_top1', top1.avg, epoch)
@@ -575,7 +563,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
     #     tf_writer.add_scalar('lr', optimizer.param_groups[-1]['lr'], epoch)
 
 
-def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None, flag='val', training_start_time=None):
+def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None, flag='val'):
     batch_time = AverageMeter('Time', ':6.3f')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
@@ -621,35 +609,13 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
         # cls_cnt = cf.sum(axis=1)
         # cls_hit = np.diag(cf)
         # cls_acc = cls_hit / cls_cnt
-        output = (
+        summary = (
             '{flag} Results (Epoch {current}/{total}): Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
             .format(flag=flag, top1=top1, top5=top5, current=epoch + 1, total=args.epochs)
         )
-        # out_cls_acc = '%s Class Accuracy: %s' % (
-        # flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
-        
-        # Calculate and display total training time if start time is provided
-        total_time_str = ''
-        if training_start_time is not None:
-            total_elapsed = time.time() - training_start_time
-            hours = int(total_elapsed // 3600)
-            minutes = int((total_elapsed % 3600) // 60)
-            seconds = int(total_elapsed % 60)
-            total_time_str = 'Total Training Time: {:02d}:{:02d}:{:02d} ({:.1f}s)'.format(
-                hours, minutes, seconds, total_elapsed)
-        
-        print(output)
-        # print(out_cls_acc)
-        # print('sample margin: ' + str(-sample_margins.avg))
-        if total_time_str:
-            print(total_time_str)
-        print()
+        print(summary)
         if log is not None:
-            log.write(output + '\n')
-            # log.write(out_cls_acc + '\n')
-            # log.write('sample margin: ' + str(-sample_margins.avg) + '\n')
-            if total_time_str:
-                log.write(total_time_str + '\n')
+            log.write(summary + '\n')
             log.flush()
 
         # if tf_writer is not None:
