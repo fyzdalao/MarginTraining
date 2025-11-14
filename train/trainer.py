@@ -119,101 +119,101 @@ def step_scheduler_with_warmup(scheduler, epoch, args):
     else:
         scheduler.step()
 
-TINY_IMAGENET_URL = 'http://cs231n.stanford.edu/tiny-imagenet-200.zip'
-TINY_IMAGENET_ARCHIVE = 'tiny-imagenet-200.zip'
-
-
-def download_and_prepare_tinyimagenet(root):
-    dataset_dir = os.path.join(root, 'tiny-imagenet-200')
-    if os.path.isdir(dataset_dir):
-        return dataset_dir
-
-    os.makedirs(root, exist_ok=True)
-    archive_path = os.path.join(root, TINY_IMAGENET_ARCHIVE)
-
-    if not os.path.isfile(archive_path):
-        print(f"Downloading TinyImageNet from {TINY_IMAGENET_URL} ...")
-        try:
-            urllib.request.urlretrieve(TINY_IMAGENET_URL, archive_path)
-        except Exception as exc:
-            raise RuntimeError(f'Failed to download TinyImageNet: {exc}') from exc
-
-    print(f"Extracting {archive_path} ...")
-    with zipfile.ZipFile(archive_path, 'r') as zip_ref:
-        zip_ref.extractall(root)
-
-    return dataset_dir
-
-
-class TinyImageNetValDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_root, transform, wnid_to_idx):
-        self.transform = transform
-        self.loader = default_loader
-        val_dir = os.path.join(dataset_root, 'val')
-        images_dir = os.path.join(val_dir, 'images')
-        annotation_path = os.path.join(val_dir, 'val_annotations.txt')
-
-        if not os.path.exists(annotation_path):
-            raise FileNotFoundError(f'Cannot find TinyImageNet validation annotations at {annotation_path}')
-
-        self.samples = []
-        with open(annotation_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) < 2:
-                    continue
-                image_name, wnid = parts[0], parts[1]
-                image_path = os.path.join(images_dir, image_name)
-                if not os.path.exists(image_path):
-                    continue
-                label = wnid_to_idx[wnid]
-                self.samples.append((image_path, label))
-
-        if not self.samples:
-            raise RuntimeError('TinyImageNet validation set appears to be empty.')
-
-        self.targets = [label for _, label in self.samples]
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, index):
-        path, target = self.samples[index]
-        img = self.loader(path)
-        if self.transform is not None:
-            img = self.transform(img)
-        return img, target
-
-
-def get_tinyimagenet_datasets(root, transform_train, transform_val):
-    dataset_dir = download_and_prepare_tinyimagenet(root)
-    wnids_path = os.path.join(dataset_dir, 'wnids.txt')
-    if not os.path.exists(wnids_path):
-        raise FileNotFoundError(f'Cannot find TinyImageNet wnids file at {wnids_path}')
-
-    with open(wnids_path, 'r') as f:
-        wnids = [line.strip() for line in f if line.strip()]
-    wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
-
-    train_dir = os.path.join(dataset_dir, 'train')
-    train_dataset = datasets.ImageFolder(train_dir, transform=transform_train)
-
-    remapped_samples = []
-    remapped_targets = []
-    for path, target in train_dataset.samples:
-        wnid = train_dataset.classes[target]
-        mapped_target = wnid_to_idx[wnid]
-        remapped_samples.append((path, mapped_target))
-        remapped_targets.append(mapped_target)
-
-    train_dataset.samples = remapped_samples
-    train_dataset.imgs = remapped_samples
-    train_dataset.targets = remapped_targets
-    train_dataset.classes = wnids
-    train_dataset.class_to_idx = wnid_to_idx
-
-    val_dataset = TinyImageNetValDataset(dataset_dir, transform_val, wnid_to_idx)
-    return train_dataset, val_dataset
+# TINY_IMAGENET_URL = 'http://cs231n.stanford.edu/tiny-imagenet-200.zip'
+# TINY_IMAGENET_ARCHIVE = 'tiny-imagenet-200.zip'
+#
+#
+# def download_and_prepare_tinyimagenet(root):
+#     dataset_dir = os.path.join(root, 'tiny-imagenet-200')
+#     if os.path.isdir(dataset_dir):
+#         return dataset_dir
+#
+#     os.makedirs(root, exist_ok=True)
+#     archive_path = os.path.join(root, TINY_IMAGENET_ARCHIVE)
+#
+#     if not os.path.isfile(archive_path):
+#         print(f"Downloading TinyImageNet from {TINY_IMAGENET_URL} ...")
+#         try:
+#             urllib.request.urlretrieve(TINY_IMAGENET_URL, archive_path)
+#         except Exception as exc:
+#             raise RuntimeError(f'Failed to download TinyImageNet: {exc}') from exc
+#
+#     print(f"Extracting {archive_path} ...")
+#     with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+#         zip_ref.extractall(root)
+#
+#     return dataset_dir
+#
+#
+# class TinyImageNetValDataset(torch.utils.data.Dataset):
+#     def __init__(self, dataset_root, transform, wnid_to_idx):
+#         self.transform = transform
+#         self.loader = default_loader
+#         val_dir = os.path.join(dataset_root, 'val')
+#         images_dir = os.path.join(val_dir, 'images')
+#         annotation_path = os.path.join(val_dir, 'val_annotations.txt')
+#
+#         if not os.path.exists(annotation_path):
+#             raise FileNotFoundError(f'Cannot find TinyImageNet validation annotations at {annotation_path}')
+#
+#         self.samples = []
+#         with open(annotation_path, 'r') as f:
+#             for line in f:
+#                 parts = line.strip().split('\t')
+#                 if len(parts) < 2:
+#                     continue
+#                 image_name, wnid = parts[0], parts[1]
+#                 image_path = os.path.join(images_dir, image_name)
+#                 if not os.path.exists(image_path):
+#                     continue
+#                 label = wnid_to_idx[wnid]
+#                 self.samples.append((image_path, label))
+#
+#         if not self.samples:
+#             raise RuntimeError('TinyImageNet validation set appears to be empty.')
+#
+#         self.targets = [label for _, label in self.samples]
+#
+#     def __len__(self):
+#         return len(self.samples)
+#
+#     def __getitem__(self, index):
+#         path, target = self.samples[index]
+#         img = self.loader(path)
+#         if self.transform is not None:
+#             img = self.transform(img)
+#         return img, target
+#
+#
+# def get_tinyimagenet_datasets(root, transform_train, transform_val):
+#     dataset_dir = download_and_prepare_tinyimagenet(root)
+#     wnids_path = os.path.join(dataset_dir, 'wnids.txt')
+#     if not os.path.exists(wnids_path):
+#         raise FileNotFoundError(f'Cannot find TinyImageNet wnids file at {wnids_path}')
+#
+#     with open(wnids_path, 'r') as f:
+#         wnids = [line.strip() for line in f if line.strip()]
+#     wnid_to_idx = {wnid: idx for idx, wnid in enumerate(wnids)}
+#
+#     train_dir = os.path.join(dataset_dir, 'train')
+#     train_dataset = datasets.ImageFolder(train_dir, transform=transform_train)
+#
+#     remapped_samples = []
+#     remapped_targets = []
+#     for path, target in train_dataset.samples:
+#         wnid = train_dataset.classes[target]
+#         mapped_target = wnid_to_idx[wnid]
+#         remapped_samples.append((path, mapped_target))
+#         remapped_targets.append(mapped_target)
+#
+#     train_dataset.samples = remapped_samples
+#     train_dataset.imgs = remapped_samples
+#     train_dataset.targets = remapped_targets
+#     train_dataset.classes = wnids
+#     train_dataset.class_to_idx = wnid_to_idx
+#
+#     val_dataset = TinyImageNetValDataset(dataset_dir, transform_val, wnid_to_idx)
+#     return train_dataset, val_dataset
 
 def main():
     # Format learning rate for naming (replace dot with underscore, e.g., 0.1 -> 0_1, 0.01 -> 0_01)
@@ -344,33 +344,57 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=True, download=True,
                                          transform=transform_train)
         val_dataset = datasets.CIFAR100(root='../database/CIFAR100', train=False, download=True, transform=transform_val)
-    elif args.dataset == 'tinyimagenet':
-        TINY_MEAN = [0.4802, 0.4481, 0.3975]
-        TINY_STD = [0.2302, 0.2265, 0.2262]
-        transform_train = transforms.Compose([
-            transforms.RandomCrop(64, padding=8),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(20),
-            transforms.ToTensor(),
-            transforms.Normalize(TINY_MEAN, TINY_STD)])
-
-        transform_val = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(TINY_MEAN, TINY_STD)])
-        tiny_root = os.path.join('../database', 'TinyImageNet')
-        train_dataset, val_dataset = get_tinyimagenet_datasets(
-            tiny_root, transform_train=transform_train, transform_val=transform_val
-        )
+    # elif args.dataset == 'tinyimagenet':
+    #     TINY_MEAN = [0.4802, 0.4481, 0.3975]
+    #     TINY_STD = [0.2302, 0.2265, 0.2262]
+    #     transform_train = transforms.Compose([
+    #         transforms.RandomCrop(64, padding=8),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.RandomRotation(20),
+    #         transforms.ToTensor(),
+    #         transforms.Normalize(TINY_MEAN, TINY_STD)])
+    #
+    #     transform_val = transforms.Compose([
+    #         transforms.ToTensor(),
+    #         transforms.Normalize(TINY_MEAN, TINY_STD)])
+    #     tiny_root = os.path.join('../database', 'TinyImageNet')
+    #     train_dataset, val_dataset = get_tinyimagenet_datasets(
+    #         tiny_root, transform_train=transform_train, transform_val=transform_val
+    #     )
     else:
         warnings.warn('Dataset is not listed!')
         return
+    # train_loader = torch.utils.data.DataLoader(
+    #     train_dataset, batch_size=args.batch_size, shuffle=True,
+    #     num_workers=args.workers, pin_memory=True
+    # )
+    # val_loader = torch.utils.data.DataLoader(
+    #     val_dataset, batch_size=args.batch_size, shuffle=False,
+    #     num_workers=args.workers, pin_memory=True
+    # )
+    worker_has_multiprocessing = args.workers > 0
+    loader_common_args = dict(
+        num_workers=args.workers,
+        pin_memory=True
+    )
+    if worker_has_multiprocessing:
+        loader_common_args.update(
+            persistent_workers=True,
+            prefetch_factor=4
+        )
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        drop_last=False,
+        **loader_common_args
     )
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        drop_last=False,
+        **loader_common_args
     )
     log_training = open(os.path.join(args.root_log, args.store_name, 'log_train.csv'), 'w')
     log_testing = open(os.path.join(args.root_log, args.store_name, 'log_test.csv'), 'w')
