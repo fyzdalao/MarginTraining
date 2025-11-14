@@ -25,7 +25,8 @@ from tensorboardX import SummaryWriter
 from sklearn.metrics import confusion_matrix
 from utils import *
 from losses import *
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 
 model_names = sorted(name for name in networks.__dict__
     if name.islower() and not name.startswith("__")
@@ -64,7 +65,7 @@ parser.add_argument('--reg', type=float, default=5, help='the weight of regulari
 parser.add_argument('--warmup-epochs', default=0, type=int, help='number of warm-up epochs (default: 0, disable warm-up)')
 parser.add_argument('--amp', dest='amp', action='store_true', help='Enable Automatic Mixed Precision training.')
 parser.add_argument('--no-amp', dest='amp', action='store_false', help='Disable Automatic Mixed Precision training.')
-parser.set_defaults(use_seed=True, amp=False)
+parser.set_defaults(use_seed=True, amp=True)
 best_acc1 = 0
 
 args = parser.parse_args()
@@ -432,7 +433,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
             input = input.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
         optimizer.zero_grad()
-        with autocast(enabled=args.amp and torch.cuda.is_available()):
+        with autocast('cuda', enabled=args.amp and torch.cuda.is_available()):
             if args.loss_type in ['L_Softmax', 'SphereFace']:
                 embedding = model.get_body(input)
                 weight = model.get_weight()
@@ -525,7 +526,7 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
             target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            with autocast(enabled=args.amp and torch.cuda.is_available()):
+            with autocast('cuda', enabled=args.amp and torch.cuda.is_available()):
                 embedding = model.get_body(input)
                 weight = model.get_weight()
                 output = model.linear(embedding)
