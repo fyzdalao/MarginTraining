@@ -71,6 +71,8 @@ parser.add_argument('--disable-checkpoint', dest='disable_checkpoint', action='s
                     help='禁用周期性checkpoint保存，仅在达到best时保存（默认启用）')
 parser.add_argument('--enable-checkpoint', dest='disable_checkpoint', action='store_false',
                     help='启用周期性checkpoint保存，可配合save-freq控制频率')
+parser.add_argument('--save-flush-freq', default=50, type=int,
+                    help='累计checkpoint于内存，每N个epoch批量写盘；<=0 表示立即写盘')
 parser.set_defaults(use_seed=True, amp=True, disable_checkpoint=True)
 best_acc1 = 0
 
@@ -420,6 +422,7 @@ def main_worker(gpu, ngpus_per_node, args):
     tf_writer = None
     # Record training start time for total elapsed time tracking
     training_start_time = time.time()
+    pending_checkpoints = []
     for epoch in range(args.start_epoch, args.epochs):
         train(train_loader, model, criterion, optimizer, epoch, args, log_training, tf_writer, scaler)
         step_scheduler_with_warmup(scheduler, epoch, args)
@@ -446,14 +449,32 @@ def main_worker(gpu, ngpus_per_node, args):
         periodic_enabled = (not args.disable_checkpoint) and (args.save_freq is None or args.save_freq > 0)
         should_save_periodic = periodic_enabled and (args.save_freq is None or (epoch + 1) % args.save_freq == 0)
         if is_best or should_save_periodic:
-            save_checkpoint(args, {
+            checkpoint_payload = {
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'best_acc1': best_acc1,
                 'optimizer': optimizer.state_dict(),
                 'scaler': scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
-            }, is_best)
+            }
+            # save_checkpoint(args, checkpoint_payload, is_best)
+            pending_checkpoints.append((epoch + 1, checkpoint_payload, is_best))
+
+        flush_freq = args.save_flush_freq
+        if pending_checkpoints:
+            if flush_freq is None or flush_freq <= 0:
+                for _, payload, mark_best in pending_checkpoints:
+                    save_checkpoint(args, payload, mark_best)
+                pending_checkpoints.clear()
+            elif (epoch + 1) % flush_freq == 0:
+                for _, payload, mark_best in pending_checkpoints:
+                    save_checkpoint(args, payload, mark_best)
+                pending_checkpoints.clear()
+
+    if pending_checkpoints:
+        for _, payload, mark_best in pending_checkpoints:
+            save_checkpoint(args, payload, mark_best)
+        pending_checkpoints.clear()
 
     # sis = get_margin(train_loader, model)
     # if tf_writer is not None:
