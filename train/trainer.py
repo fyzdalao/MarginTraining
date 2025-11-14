@@ -419,14 +419,29 @@ def main_worker(gpu, ngpus_per_node, args):
     # args.reg = args.reg * 100 / (num_classes ** 2)
     # tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
     tf_writer = None
-    # Record training start time for total elapsed time tracking
+    training_start_time = time.time()
     pending_checkpoints = []
     for epoch in range(args.start_epoch, args.epochs):
         train(train_loader, model, criterion, optimizer, epoch, args, tf_writer, scaler)
         step_scheduler_with_warmup(scheduler, epoch, args)
-        acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer)
+        val_top1, val_top5 = validate(val_loader, model, criterion, epoch, args, tf_writer=tf_writer)
+        acc1 = val_top1
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
+        total_elapsed = max(0.0, time.time() - training_start_time)
+        hours = int(total_elapsed // 3600)
+        minutes = int((total_elapsed % 3600) // 60)
+        seconds = int(total_elapsed % 60)
+        total_time_str = ' Total Training Time: {:02d}:{:02d}:{:02d} ({:.1f}s)'.format(
+            hours, minutes, seconds, total_elapsed)
+        summary = (
+            'val Results (Epoch {current}/{total}): Prec@1 {top1:.3f} Prec@5 {top5:.3f} Best Prec@1 {best:.3f}'
+            .format(current=epoch + 1, total=args.epochs, top1=val_top1, top5=val_top5, best=best_acc1)
+        )
+        summary_line = summary + total_time_str
+        print(summary_line)
+        log_testing.write(summary_line + '\n')
+        log_testing.flush()
         # if tf_writer is not None:
         #     tf_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
         # 原始每个 epoch 都保存的逻辑：
@@ -579,52 +594,18 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
                 input = input.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
 
-            # compute output
             with autocast('cuda', enabled=args.amp and torch.cuda.is_available()):
                 embedding = model.get_body(input)
                 output = model.linear(embedding)
-            # measure accuracy and record loss
+
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             top1.update(acc1[0], input.size(0))
             top5.update(acc5[0], input.size(0))
 
-            # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
 
-            # _, pred = torch.max(output, 1)
-            # all_preds.extend(pred.cpu().numpy())
-            # all_targets.extend(target.cpu().numpy())
-
-            # if i % args.print_freq == 0:
-            #     output = ('Test: [{0}/{1}]\t'
-            #               'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-            #               'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-            #               'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
-            #           'SaMargin {sample_margin.val:.3f} ({sample_margin.avg:.3f})'.format(
-            #         i, len(val_loader), batch_time=batch_time,
-            #         top1=top1, top5=top5, sample_margin=sample_margins))
-            #     print(output)
-        # cf = confusion_matrix(all_targets, all_preds).astype(float)
-        # cls_cnt = cf.sum(axis=1)
-        # cls_hit = np.diag(cf)
-        # cls_acc = cls_hit / cls_cnt
-        summary = (
-            '{flag} Results (Epoch {current}/{total}): Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
-            .format(flag=flag, top1=top1, top5=top5, current=epoch + 1, total=args.epochs)
-        )
-        print(summary)
-        if log is not None:
-            log.write(summary + '\n')
-            log.flush()
-
-        # if tf_writer is not None:
-        #     tf_writer.add_scalar('sample_margin/test_' + flag, -sample_margins.avg, epoch)
-        #     tf_writer.add_scalar('acc/test_' + flag + '_top1', top1.avg, epoch)
-        #     tf_writer.add_scalar('acc/test_' + flag + '_top5', top5.avg, epoch)
-        #     tf_writer.add_scalars('acc/test_' + flag + '_cls_acc', {str(i): x for i, x in enumerate(cls_acc)}, epoch)
-
-    return top1.avg
+    return top1.avg, top5.avg
 
 
 
