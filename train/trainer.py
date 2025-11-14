@@ -65,7 +65,13 @@ parser.add_argument('--reg', type=float, default=5, help='the weight of regulari
 parser.add_argument('--warmup-epochs', default=0, type=int, help='number of warm-up epochs (default: 0, disable warm-up)')
 parser.add_argument('--amp', dest='amp', action='store_true', help='Enable Automatic Mixed Precision training.')
 parser.add_argument('--no-amp', dest='amp', action='store_false', help='Disable Automatic Mixed Precision training.')
-parser.set_defaults(use_seed=True, amp=True)
+parser.add_argument('--save-freq', default=0, type=int,
+                    help='epochs between checkpoint saves; <=0 表示仅在达到best时保存')
+parser.add_argument('--disable-checkpoint', dest='disable_checkpoint', action='store_true',
+                    help='禁用周期性checkpoint保存，仅在达到best时保存（默认启用）')
+parser.add_argument('--enable-checkpoint', dest='disable_checkpoint', action='store_false',
+                    help='启用周期性checkpoint保存，可配合save-freq控制频率')
+parser.set_defaults(use_seed=True, amp=True, disable_checkpoint=True)
 best_acc1 = 0
 
 args = parser.parse_args()
@@ -386,7 +392,8 @@ def main_worker(gpu, ngpus_per_node, args):
         warnings.warn('The loss type is not listed!')
         return
     # args.reg = args.reg * 100 / (num_classes ** 2)
-    tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
+    # tf_writer = SummaryWriter(log_dir=os.path.join(args.root_log, args.store_name))
+    tf_writer = None
     # Record training start time for total elapsed time tracking
     training_start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -395,31 +402,46 @@ def main_worker(gpu, ngpus_per_node, args):
         acc1 = validate(val_loader, model, criterion, epoch, args, log_testing, tf_writer, training_start_time=training_start_time)
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
-        tf_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
+        # if tf_writer is not None:
+        #     tf_writer.add_scalar('acc/test_top1_best', best_acc1, epoch)
         output_best = 'Best Prec@1: %.3f\n' % (best_acc1)
         print(output_best)
         log_testing.write(output_best + '\n')
         log_testing.flush()
 
-        save_checkpoint(args, {
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_acc1': best_acc1,
-            'optimizer': optimizer.state_dict(),
-            'scaler': scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
-        }, is_best)
+        # 原始每个 epoch 都保存的逻辑：
+        # save_checkpoint(args, {
+        #     'epoch': epoch + 1,
+        #     'arch': args.arch,
+        #     'state_dict': model.state_dict(),
+        #     'best_acc1': best_acc1,
+        #     'optimizer': optimizer.state_dict(),
+        #     'scaler': scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
+        # }, is_best)
 
-    sis = get_margin(train_loader, model)
-    tf_writer.add_histogram('similarity/train', sis)
-    sis = get_margin(val_loader, model)
-    tf_writer.add_histogram('similarity/test', sis)
+        periodic_enabled = (not args.disable_checkpoint) and (args.save_freq is None or args.save_freq > 0)
+        should_save_periodic = periodic_enabled and (args.save_freq is None or (epoch + 1) % args.save_freq == 0)
+        if is_best or should_save_periodic:
+            save_checkpoint(args, {
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_acc1': best_acc1,
+                'optimizer': optimizer.state_dict(),
+                'scaler': scaler.state_dict() if scaler is not None and scaler.is_enabled() else None,
+            }, is_best)
+
+    # sis = get_margin(train_loader, model)
+    # if tf_writer is not None:
+    #     tf_writer.add_histogram('similarity/train', sis)
+    # sis = get_margin(val_loader, model)
+    # if tf_writer is not None:
+    #     tf_writer.add_histogram('similarity/test', sis)
 
 def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer, scaler):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    sample_margins = AverageMeter('Sample Margin', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     sample_margin = SampleMarginLoss()
@@ -439,18 +461,22 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
                 weight = model.get_weight()
                 loss = criterion(weight, embedding, target)
                 output = F.linear(embedding, weight)
-                weight_norm = F.normalize(weight, dim=1)
-                embedding_norm = F.normalize(embedding, dim=1)
-                output_norm = F.linear(embedding_norm, weight_norm)
-                sm = sample_margin(output_norm, target)
+                sm = None
+                if args.reg_type == 'margin':
+                    weight_norm = F.normalize(weight, dim=1)
+                    embedding_norm = F.normalize(embedding, dim=1)
+                    output_norm = F.linear(embedding_norm, weight_norm)
+                    sm = sample_margin(output_norm, target)
             else:
                 embedding = model.get_body(input)
                 weight = model.get_weight()
                 output = model.linear(embedding)
-                weight_norm = F.normalize(weight, dim=1)
-                embedding_norm = F.normalize(embedding, dim=1)
-                output_norm = F.linear(embedding_norm, weight_norm)
-                sm = sample_margin(output_norm, target)
+                sm = None
+                if args.reg_type == 'margin':
+                    weight_norm = F.normalize(weight, dim=1)
+                    embedding_norm = F.normalize(embedding, dim=1)
+                    output_norm = F.linear(embedding_norm, weight_norm)
+                    sm = sample_margin(output_norm, target)
                 if args.reg_type == 'weight':
                     reg = norm_weights(weight)
                 elif args.reg_type == 'margin':
@@ -460,7 +486,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
                 loss = criterion(output, target) + args.reg * reg
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
-        sample_margins.update(sm.item(), input.size(0))
         top1.update(acc1[0], input.size(0))
         top5.update(acc5[0], input.size(0))
 
@@ -477,47 +502,43 @@ def train(train_loader, model, criterion, optimizer, epoch, args, log, tf_writer
 
         batch_time.update(time.time() - end)
         end = time.time()
-        if i % args.print_freq == 0:
-            current_lr = optimizer.param_groups[-1]['lr']
-            output = (
-                f"Epoch: [{epoch}/{args.epochs}][{i}/{len(train_loader)}], lr: {current_lr:.5f}\t"
-                f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                f"Data {data_time.val:.3f} ({data_time.avg:.3f})\t"
-                f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
-                f"Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t"
-                f"Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t"
-                f"SaMargin {sample_margins.val:.3f} ({sample_margins.avg:.3f})"
-            )
-            print(output)
-            log.write(output + '\n')
-            log.flush()
-    margin, ratio = model.margin()
+        # if i % args.print_freq == 0:
+        #     current_lr = optimizer.param_groups[-1]['lr']
+        #     output = (
+        #         f"Epoch: [{epoch}/{args.epochs}][{i}/{len(train_loader)}], lr: {current_lr:.5f}\t"
+        #         f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
+        #         f"Data {data_time.val:.3f} ({data_time.avg:.3f})\t"
+        #         f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
+        #         f"Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t"
+        #         f"Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t"
+        #         f"SaMargin {sample_margins.val:.3f} ({sample_margins.avg:.3f})"
+        #     )
+        #     print(output)
+        #     log.write(output + '\n')
+        #     log.flush()
+    # margin, ratio = model.margin()
     output = (
-        f"\nEpoch [{epoch}/{args.epochs}]:\t loss={losses.avg:.4f}\t Prec@1={top1.avg:.4f}\t Prec@5={top5.avg:.4f}\t "
-        f"ClsMargin={margin:.4f}\t SaMargin={-sample_margins.avg:.4f}\n"
+        f"\nEpoch [{epoch}/{args.epochs}]:\t loss={losses.avg:.4f}\t Prec@1={top1.avg:.4f}\t Prec@5={top5.avg:.4f}\n"
     )
     print(output)
     log.write(output)
     log.flush()
-    tf_writer.add_scalar('loss/train', losses.avg, epoch)
-    tf_writer.add_scalar('sample_margin/train', -sample_margins.avg, epoch)
-    tf_writer.add_scalar('acc/train_top1', top1.avg, epoch)
-    tf_writer.add_scalar('acc/train_top5', top5.avg, epoch)
-    tf_writer.add_scalar('margin', margin, epoch)
-    tf_writer.add_scalar('ratio', ratio, epoch)
-    tf_writer.add_scalar('lr', optimizer.param_groups[-1]['lr'], epoch)
+    # if tf_writer is not None:
+    #     tf_writer.add_scalar('loss/train', losses.avg, epoch)
+    #     tf_writer.add_scalar('acc/train_top1', top1.avg, epoch)
+    #     tf_writer.add_scalar('acc/train_top5', top5.avg, epoch)
+    #     tf_writer.add_scalar('lr', optimizer.param_groups[-1]['lr'], epoch)
 
 
 def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None, flag='val', training_start_time=None):
     batch_time = AverageMeter('Time', ':6.3f')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    sample_margins = AverageMeter('Sample Margin', ':.4e')
     # switch to evaluate mode
     model.eval()
-    all_preds = []
-    all_targets = []
-    sample_margin = SampleMarginLoss()
+    # all_preds = []
+    # all_targets = []
+    # sample_margin = SampleMarginLoss()
     with torch.no_grad():
         end = time.time()
         for i, (input, target) in enumerate(val_loader):
@@ -528,15 +549,9 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
             # compute output
             with autocast('cuda', enabled=args.amp and torch.cuda.is_available()):
                 embedding = model.get_body(input)
-                weight = model.get_weight()
                 output = model.linear(embedding)
-                embedding_norm = F.normalize(embedding)
-                weight_norm = F.normalize(weight)
-                output_norm = F.linear(embedding_norm, weight_norm)
-                sm = sample_margin(output_norm, target)
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            sample_margins.update(sm.item(), input.size(0))
             top1.update(acc1[0], input.size(0))
             top5.update(acc5[0], input.size(0))
 
@@ -544,29 +559,29 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
             batch_time.update(time.time() - end)
             end = time.time()
 
-            _, pred = torch.max(output, 1)
-            all_preds.extend(pred.cpu().numpy())
-            all_targets.extend(target.cpu().numpy())
+            # _, pred = torch.max(output, 1)
+            # all_preds.extend(pred.cpu().numpy())
+            # all_targets.extend(target.cpu().numpy())
 
-            if i % args.print_freq == 0:
-                output = ('Test: [{0}/{1}]\t'
-                          'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                          'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                          'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
-                      'SaMargin {sample_margin.val:.3f} ({sample_margin.avg:.3f})'.format(
-                    i, len(val_loader), batch_time=batch_time,
-                    top1=top1, top5=top5, sample_margin=sample_margins))
-                print(output)
-        cf = confusion_matrix(all_targets, all_preds).astype(float)
-        cls_cnt = cf.sum(axis=1)
-        cls_hit = np.diag(cf)
-        cls_acc = cls_hit / cls_cnt
+            # if i % args.print_freq == 0:
+            #     output = ('Test: [{0}/{1}]\t'
+            #               'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+            #               'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+            #               'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
+            #           'SaMargin {sample_margin.val:.3f} ({sample_margin.avg:.3f})'.format(
+            #         i, len(val_loader), batch_time=batch_time,
+            #         top1=top1, top5=top5, sample_margin=sample_margins))
+            #     print(output)
+        # cf = confusion_matrix(all_targets, all_preds).astype(float)
+        # cls_cnt = cf.sum(axis=1)
+        # cls_hit = np.diag(cf)
+        # cls_acc = cls_hit / cls_cnt
         output = (
             '{flag} Results (Epoch {current}/{total}): Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
             .format(flag=flag, top1=top1, top5=top5, current=epoch + 1, total=args.epochs)
         )
-        out_cls_acc = '%s Class Accuracy: %s' % (
-        flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
+        # out_cls_acc = '%s Class Accuracy: %s' % (
+        # flag, (np.array2string(cls_acc, separator=',', formatter={'float_kind': lambda x: "%.3f" % x})))
         
         # Calculate and display total training time if start time is provided
         total_time_str = ''
@@ -579,23 +594,24 @@ def validate(val_loader, model, criterion, epoch, args, log=None, tf_writer=None
                 hours, minutes, seconds, total_elapsed)
         
         print(output)
-        print(out_cls_acc)
-        print('sample margin: ' + str(-sample_margins.avg))
+        # print(out_cls_acc)
+        # print('sample margin: ' + str(-sample_margins.avg))
         if total_time_str:
             print(total_time_str)
         print()
         if log is not None:
             log.write(output + '\n')
-            log.write(out_cls_acc + '\n')
-            log.write('sample margin: ' + str(-sample_margins.avg) + '\n')
+            # log.write(out_cls_acc + '\n')
+            # log.write('sample margin: ' + str(-sample_margins.avg) + '\n')
             if total_time_str:
                 log.write(total_time_str + '\n')
             log.flush()
 
-        tf_writer.add_scalar('sample_margin/test_' + flag, -sample_margins.avg, epoch)
-        tf_writer.add_scalar('acc/test_' + flag + '_top1', top1.avg, epoch)
-        tf_writer.add_scalar('acc/test_' + flag + '_top5', top5.avg, epoch)
-        tf_writer.add_scalars('acc/test_' + flag + '_cls_acc', {str(i): x for i, x in enumerate(cls_acc)}, epoch)
+        # if tf_writer is not None:
+        #     tf_writer.add_scalar('sample_margin/test_' + flag, -sample_margins.avg, epoch)
+        #     tf_writer.add_scalar('acc/test_' + flag + '_top1', top1.avg, epoch)
+        #     tf_writer.add_scalar('acc/test_' + flag + '_top5', top5.avg, epoch)
+        #     tf_writer.add_scalars('acc/test_' + flag + '_cls_acc', {str(i): x for i, x in enumerate(cls_acc)}, epoch)
 
     return top1.avg
 
